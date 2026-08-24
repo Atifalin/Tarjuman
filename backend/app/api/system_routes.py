@@ -23,8 +23,12 @@ ARGOS_DATA_DIR.mkdir(parents=True, exist_ok=True)
 # NLLB-200 1.3B (CTranslate2) & Qari-OCR-0.4.0 (MLX) install targets
 NLLB_HF_REPO = "facebook/nllb-200-distilled-1.3B"
 NLLB_CT2_DIRNAME = "nllb-200-1.3b"
+# NAMAA-Space only publishes a PEFT LoRA adapter (not a merged model), fine-tuned on top
+# of this base — it must be merged before it can be converted to a standalone MLX model.
+QARI_OCR_BASE_REPO = "unsloth/Qwen3-VL-4B-Instruct"
 QARI_OCR_HF_REPO = "NAMAA-Space/Qari-OCR-0.4.0-VL-4B-Instruct"
 QARI_OCR_MLX_DIRNAME = "qari-ocr-0.4.0-mlx-4bit"
+QARI_OCR_MERGED_DIRNAME = "_qari-ocr-0.4.0-merged-tmp"
 
 # Global tracker for background install jobs
 INSTALL_STATE: Dict[str, Any] = {
@@ -591,11 +595,39 @@ async def install_nllb(background_tasks: BackgroundTasks):
     return {"success": True, "message": "NLLB-200 1.3B download & CTranslate2 conversion started in background.", "status": INSTALL_STATE}
 
 
+_QARI_MERGE_SCRIPT = """
+import sys
+import torch
+from transformers import AutoModelForImageTextToText, AutoProcessor
+from peft import PeftModel
+
+base_repo = sys.argv[1]
+adapter_repo = sys.argv[2]
+out_dir = sys.argv[3]
+
+print(f"Loading base model {base_repo} (fp16)...", flush=True)
+base = AutoModelForImageTextToText.from_pretrained(base_repo, torch_dtype=torch.float16, low_cpu_mem_usage=True)
+
+print(f"Applying Qari-OCR LoRA adapter {adapter_repo}...", flush=True)
+model = PeftModel.from_pretrained(base, adapter_repo)
+
+print("Merging adapter weights into base model...", flush=True)
+merged = model.merge_and_unload()
+merged.save_pretrained(out_dir, safe_serialization=True)
+
+print("Saving processor/tokenizer...", flush=True)
+processor = AutoProcessor.from_pretrained(adapter_repo)
+processor.save_pretrained(out_dir)
+
+print("MERGE_COMPLETE", flush=True)
+"""
+
+
 def _run_mlx_ocr_install():
     global INSTALL_STATE
     INSTALL_STATE["status"] = "installing"
     INSTALL_STATE["target"] = "mlx_ocr"
-    INSTALL_STATE["logs"] = "Step 1/2: Installing mlx & mlx-vlm (Apple Silicon native runtime)...\n"
+    INSTALL_STATE["logs"] = "Step 1/3: Installing mlx, mlx-vlm, peft, transformers, accelerate...\n"
     INSTALL_STATE["error"] = None
 
     if not _is_apple_silicon():
@@ -606,23 +638,41 @@ def _run_mlx_ocr_install():
 
     python_bin = sys.executable
     out_dir = _models_dir() / QARI_OCR_MLX_DIRNAME
+    merged_dir = _models_dir() / QARI_OCR_MERGED_DIRNAME
     env = os.environ.copy()
     env["HF_HOME"] = str(_models_dir() / ".hf_cache")
 
     try:
-        pip_cmd = [python_bin, "-m", "pip", "install", "--upgrade", "mlx", "mlx-vlm"]
+        pip_cmd = [python_bin, "-m", "pip", "install", "--upgrade", "mlx", "mlx-vlm", "peft", "transformers", "accelerate"]
         INSTALL_STATE["logs"] += f"Executing: {' '.join(pip_cmd)}\n"
         proc = subprocess.Popen(pip_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in iter(proc.stdout.readline, ''):
             INSTALL_STATE["logs"] += line
         proc.stdout.close()
         if proc.wait() != 0:
-            raise RuntimeError("pip install failed for mlx/mlx-vlm")
+            raise RuntimeError("pip install failed for mlx/mlx-vlm/peft")
 
-        INSTALL_STATE["logs"] += f"\nStep 2/2: Downloading & quantizing {QARI_OCR_HF_REPO} to MLX 4-bit (~2.5 GB download)...\n"
+        # NAMAA-Space only ships a PEFT LoRA adapter for 0.4.0, not a merged model — merge it
+        # into the base Qwen3-VL-4B-Instruct first so mlx_vlm.convert has a real config.json
+        # and full weights to work with.
+        INSTALL_STATE["logs"] += (
+            f"\nStep 2/3: Downloading base model ({QARI_OCR_BASE_REPO}, ~8 GB fp16) and merging "
+            f"the Qari-OCR-0.4.0 LoRA adapter into it (NAMAA-Space only publishes the adapter, not a merged model)...\n"
+        )
+        merge_cmd = [python_bin, "-c", _QARI_MERGE_SCRIPT, QARI_OCR_BASE_REPO, QARI_OCR_HF_REPO, str(merged_dir)]
+        proc = subprocess.Popen(merge_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        for line in iter(proc.stdout.readline, ''):
+            INSTALL_STATE["logs"] += line
+            if len(INSTALL_STATE["logs"]) > 20000:
+                INSTALL_STATE["logs"] = INSTALL_STATE["logs"][-15000:]
+        proc.stdout.close()
+        if proc.wait() != 0 or "MERGE_COMPLETE" not in INSTALL_STATE["logs"][-4000:]:
+            raise RuntimeError("Failed to merge Qari-OCR LoRA adapter into base model")
+
+        INSTALL_STATE["logs"] += f"\nStep 3/3: Quantizing merged model to native MLX 4-bit (~2.5 GB output)...\n"
         convert_cmd = [
             python_bin, "-m", "mlx_vlm.convert",
-            "--hf-path", QARI_OCR_HF_REPO,
+            "--hf-path", str(merged_dir),
             "--mlx-path", str(out_dir),
             "-q", "--q-bits", "4"
         ]
@@ -637,11 +687,16 @@ def _run_mlx_ocr_install():
         if rc != 0:
             raise RuntimeError(f"mlx_vlm.convert exited with code {rc}")
 
+        # Reclaim disk space: the merged fp16 model (~8GB) is no longer needed once quantized.
+        INSTALL_STATE["logs"] += "\nCleaning up temporary merged fp16 model to reclaim disk space...\n"
+        shutil.rmtree(merged_dir, ignore_errors=True)
+
         INSTALL_STATE["status"] = "completed"
         INSTALL_STATE["logs"] += f"\n✅ Qari-OCR-0.4.0 MLX model ready at {out_dir}. Starting local MLX-VLM server...\n"
         start_res = _start_mlx_server_process(out_dir)
         INSTALL_STATE["logs"] += f"{start_res['message']}\n"
     except Exception as e:
+        shutil.rmtree(merged_dir, ignore_errors=True)
         INSTALL_STATE["status"] = "failed"
         INSTALL_STATE["error"] = str(e)
         INSTALL_STATE["logs"] += f"\n❌ MLX Qari-OCR installation exception: {str(e)}\n"
