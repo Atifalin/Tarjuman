@@ -111,7 +111,7 @@ export const api = {
 
   updateProjectModels: async (
     projectId: string,
-    updates: { primary_model_id?: string; secondary_model_id?: string; reviewer_model_id?: string; gemini_model_id?: string; mode?: string }
+    updates: { primary_model_id?: string; secondary_model_id?: string; reviewer_model_id?: string; gemini_model_id?: string; mode?: string; privacy_mode?: string }
   ): Promise<ProjectRecord> => {
     const res = await fetch(`${API_BASE}/projects/${projectId}/models`, {
       method: 'PATCH',
@@ -399,8 +399,21 @@ export const api = {
     return res.json();
   },
 
-  installNLLB: async (): Promise<{ success: boolean; message: string }> => {
-    const res = await fetch(`${API_BASE}/system/install-nllb`, { method: 'POST' });
+  installNLLB: async (variant: '1.3b' | '3.3b' = '1.3b', force: boolean = false): Promise<{ success: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/system/install-nllb?variant=${variant}&force=${force}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to start NLLB install');
+    }
+    return res.json();
+  },
+
+  installMadlad: async (variant: '7b' | '10b' = '10b', force: boolean = false): Promise<{ success: boolean; message: string }> => {
+    const res = await fetch(`${API_BASE}/system/install-madlad?variant=${variant}&force=${force}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to start MADLAD install');
+    }
     return res.json();
   },
 

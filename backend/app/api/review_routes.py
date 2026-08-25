@@ -172,13 +172,24 @@ async def fetch_english_reference_for_chunk(req: FetchEnglishReferenceRequest):
         proj = cursor.fetchone()
         privacy_mode = proj["privacy_mode"] if proj else "LOCAL_ONLY"
 
-    res = await router_engine.generate_english_reference(
-        source_arabic=chunk["source_text"],
-        provider_model_id=req.provider_model_id,
-        privacy_mode=privacy_mode
-    )
-
     now_str = datetime.now().isoformat()
+    try:
+        res = await router_engine.generate_english_reference(
+            source_arabic=chunk["source_text"],
+            provider_model_id=req.provider_model_id,
+            privacy_mode=privacy_mode
+        )
+        english_reference = res["english_reference"]
+        provider = res["provider"]
+        model = res["model"]
+        route = res["route"]
+    except Exception as e:
+        err_msg = str(e)
+        english_reference = f"[English reference error: {err_msg}]"
+        provider = req.provider_model_id
+        model = req.provider_model_id
+        route = "failed"
+
     with get_db() as conn:
         conn.execute("""
         UPDATE chunks SET
@@ -190,10 +201,10 @@ async def fetch_english_reference_for_chunk(req: FetchEnglishReferenceRequest):
             updated_at = ?
         WHERE id = ?;
         """, (
-            res["english_reference"],
-            res["provider"],
-            res["model"],
-            res["route"],
+            english_reference,
+            provider,
+            model,
+            route,
             now_str,
             now_str,
             req.chunk_id

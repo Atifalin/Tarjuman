@@ -17,9 +17,11 @@ import {
   Trash2,
   Eye,
   Copy,
-  X
+  X,
+  Cpu,
+  ShieldCheck
 } from 'lucide-react';
-import { ProjectRecord, DocumentRecord, ModelCapability } from '../../types';
+import { ProjectRecord, DocumentRecord, ModelCapability, SystemDependenciesResponse } from '../../types';
 import { api } from '../../services/api';
 
 interface DocumentQueueViewProps {
@@ -28,6 +30,7 @@ interface DocumentQueueViewProps {
   models: ModelCapability[];
   onOpenReview: () => void;
   onOpenBenchmark: () => void;
+  onOpenWizard: () => void;
 }
 
 export const DocumentQueueView: React.FC<DocumentQueueViewProps> = ({
@@ -35,12 +38,15 @@ export const DocumentQueueView: React.FC<DocumentQueueViewProps> = ({
   onSelectProject,
   models,
   onOpenReview,
-  onOpenBenchmark
+  onOpenBenchmark,
+  onOpenWizard
 }) => {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [projectStats, setProjectStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [deps, setDeps] = useState<SystemDependenciesResponse | null>(null);
+  const [switchingModel, setSwitchingModel] = useState(false);
 
   // Drag & Drop / Upload State
   const [isDragging, setIsDragging] = useState(false);
@@ -121,10 +127,35 @@ export const DocumentQueueView: React.FC<DocumentQueueViewProps> = ({
       setProjectStats(details.stats);
       const docs = await api.listProjectDocuments(projId);
       setDocuments(docs);
+      const d = await api.getDependencies();
+      setDeps(d);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleChangePrimaryModel = async (modelId: string) => {
+    if (!activeProject || !modelId || modelId === activeProject.primary_model_id) return;
+    setSwitchingModel(true);
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, { primary_model_id: modelId });
+      onSelectProject(updated);
+    } catch (err: any) {
+      alert(`Failed to switch model: ${err.message}`);
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
+
+  const handleChangePrivacy = async (mode: ProjectRecord['privacy_mode']) => {
+    if (!activeProject || mode === activeProject.privacy_mode) return;
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, { privacy_mode: mode });
+      onSelectProject(updated);
+    } catch (err: any) {
+      alert(`Failed to update privacy: ${err.message}`);
     }
   };
 
@@ -440,6 +471,61 @@ export const DocumentQueueView: React.FC<DocumentQueueViewProps> = ({
                   <Download className="w-3.5 h-3.5 text-amber-400" />
                 </a>
               </div>
+            </div>
+          </div>
+
+          {/* Translation Model Readiness / Selector — check before starting a large run */}
+          <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center gap-3">
+            <Cpu className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span className="text-xs text-slate-400 shrink-0">Translation Model:</span>
+            <select
+              value={activeProject.primary_model_id}
+              onChange={(e) => handleChangePrimaryModel(e.target.value)}
+              disabled={switchingModel}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono disabled:opacity-50"
+            >
+              {models.filter((m) => m.translation_capable).map((m) => {
+                const ready = deps?.readiness_matrix?.[m.model_id]?.ready;
+                const isPublicOrCloud = m.provider_class === 'PUBLIC_WEB' || m.provider_class === 'CLOUD_AI';
+                const blocked = isPublicOrCloud && activeProject.privacy_mode === 'LOCAL_ONLY';
+                const ramNote = m.minimum_recommended_ram_gb > 16 ? ` (${m.minimum_recommended_ram_gb}GB+ RAM)` : '';
+                return (
+                  <option key={m.model_id} value={m.model_id} disabled={blocked}>
+                    {ready ? '✓ ' : '○ '}{m.display_name}{ramNote}{ready ? '' : ' (not downloaded)'}{blocked ? ' — blocked (Local Only)' : ''}
+                  </option>
+                );
+              })}
+            </select>
+
+            {deps?.readiness_matrix?.[activeProject.primary_model_id] && (
+              deps.readiness_matrix[activeProject.primary_model_id].ready ? (
+                <span className="text-[11px] text-emerald-400 font-mono">✓ Ready</span>
+              ) : (
+                <div className="flex items-center gap-2 text-[11px] text-amber-300">
+                  <span>{deps.readiness_matrix[activeProject.primary_model_id].reason}</span>
+                  <button
+                    onClick={onOpenWizard}
+                    className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1 rounded-lg whitespace-nowrap"
+                  >
+                    Download in Setup Wizard
+                  </button>
+                </div>
+              )
+            )}
+
+            <div className="flex items-center gap-1.5 ml-auto">
+              <ShieldCheck className="w-4 h-4 text-slate-500" />
+              <span className="text-xs text-slate-400">Privacy</span>
+              <select
+                value={activeProject.privacy_mode || 'LOCAL_ONLY'}
+                onChange={(e) => handleChangePrivacy(e.target.value as ProjectRecord['privacy_mode'])}
+                className="bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono"
+                title="Project privacy mode: which model types are allowed for translation"
+              >
+                <option value="LOCAL_ONLY">Local Only</option>
+                <option value="LOCAL_AND_CLOUD">Local + Gemini Cloud</option>
+                <option value="ALLOW_PUBLIC_WEB">Allow Public Web (Google)</option>
+              </select>
             </div>
           </div>
 

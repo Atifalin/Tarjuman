@@ -20,9 +20,14 @@ router = APIRouter(prefix="/api/system", tags=["System & Dependencies"])
 ARGOS_DATA_DIR = (Path(__file__).resolve().parent.parent.parent.parent / "data" / "argos_data")
 ARGOS_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# NLLB-200 1.3B (CTranslate2) & Qari-OCR-0.4.0 (MLX) install targets
+# NLLB-200 (CTranslate2) & Qari-OCR-0.4.0 (MLX) install targets
 NLLB_HF_REPO = "facebook/nllb-200-distilled-1.3B"
 NLLB_CT2_DIRNAME = "nllb-200-1.3b"
+# Larger, higher-quality NLLB variant — only offered/installable on 32GB+ RAM Macs (see
+# RAM guard in install_nllb below), since the fp16 Transformers fallback alone is ~6.6GB
+# and running it alongside the OS + Qari-OCR MLX server needs real headroom.
+NLLB_3_3B_HF_REPO = "facebook/nllb-200-3.3B"
+NLLB_3_3B_CT2_DIRNAME = "nllb-200-3.3b"
 # NAMAA-Space only publishes a PEFT LoRA adapter (not a merged model), fine-tuned on top
 # of this base — it must be merged before it can be converted to a standalone MLX model.
 QARI_OCR_BASE_REPO = "unsloth/Qwen3-VL-4B-Instruct"
@@ -166,6 +171,36 @@ async def get_dependencies_status():
     else:
         nllb_13b_reason = "CTranslate2 weights not downloaded yet (click Install NLLB-200 1.3B)"
 
+    # Google MADLAD-400 10.7B (higher quality, 32GB+ RAM recommended)
+    import psutil as _psutil
+    total_ram_gb_now = _psutil.virtual_memory().total / (1024 ** 3)
+    from backend.app.providers.transformers_provider import TransformersProvider as _TP
+    madlad_10b_cached = _TP().has_local_weights_cached("madlad400-10b-mt")
+    if madlad_10b_cached:
+        madlad_10b_ready = True
+        madlad_10b_reason = "READY (fp16, Direct ar → ur, cached HuggingFace weights)"
+    elif not (torch_installed and transformers_installed):
+        madlad_10b_ready = False
+        madlad_10b_reason = "PyTorch/Transformers runtime not installed"
+    elif total_ram_gb_now < 28:
+        madlad_10b_ready = False
+        madlad_10b_reason = f"Recommended for 32GB+ RAM Macs (this Mac has ~{total_ram_gb_now:.0f}GB) — install is available but not recommended here"
+    else:
+        madlad_10b_ready = False
+        madlad_10b_reason = "Not downloaded yet (click Install MADLAD-400 10.7B, ~21 GB)"
+
+    # Meta NLLB-200 3.3B (higher quality, 32GB+ RAM recommended)
+    nllb_33b_dir_exists = (_models_dir() / NLLB_3_3B_CT2_DIRNAME / "model.bin").exists()
+    if nllb_33b_dir_exists:
+        nllb_33b_ready = True
+        nllb_33b_reason = "READY (CTranslate2 int8, Direct ar → ur, higher quality than 1.3B)"
+    elif total_ram_gb_now < 28:
+        nllb_33b_ready = False
+        nllb_33b_reason = f"Recommended for 32GB+ RAM Macs (this Mac has ~{total_ram_gb_now:.0f}GB) — install is available but not recommended here"
+    else:
+        nllb_33b_ready = False
+        nllb_33b_reason = "Not downloaded yet (click Install NLLB-200 3.3B, ~6.6 GB)"
+
     # Qari-OCR-0.4.0 (native MLX Arabic OCR)
     mlx_installed = False
     mlx_vlm_installed = False
@@ -273,6 +308,8 @@ async def get_dependencies_status():
             "qwen2-vl:7b": {"ready": qwen_vl_ready, "status": "READY" if qwen_vl_ready else ("NOT_CONNECTED" if not ollama_running else "NOT_INSTALLED"), "reason": qwen_vl_reason},
             "madlad400-7b-mt": {"ready": madlad_ready, "status": "READY" if madlad_ready else "NOT_INSTALLED", "reason": madlad_reason},
             "nllb-200-distilled-1.3b": {"ready": nllb_13b_ready, "status": "READY" if nllb_13b_ready else "NOT_INSTALLED", "reason": nllb_13b_reason},
+            "nllb-200-3.3b": {"ready": nllb_33b_ready, "status": "READY" if nllb_33b_ready else "NOT_INSTALLED", "reason": nllb_33b_reason},
+            "madlad400-10b-mt": {"ready": madlad_10b_ready, "status": "READY" if madlad_10b_ready else "NOT_INSTALLED", "reason": madlad_10b_reason},
             "qari-ocr-0.4.0-vl-4b": {"ready": qari_ready, "status": "READY" if qari_ready else "NOT_INSTALLED", "reason": qari_reason},
             "qwen3:8b": {"ready": qwen3_ready, "status": "READY" if qwen3_ready else ("NOT_CONNECTED" if not ollama_running else "NOT_INSTALLED"), "reason": qwen3_reason},
             "gemini-3.6-flash": {"ready": gemini_ready, "status": "READY" if gemini_ready else "NOT_CONFIGURED", "reason": gemini_reason},
@@ -517,15 +554,21 @@ def verify_pytorch():
             "message": f"PyTorch is not installed: {str(e)}"
         }
 
-def _run_nllb_install():
+def _run_nllb_install(variant: str = "1.3b"):
     global INSTALL_STATE
+    is_3_3b = variant == "3.3b"
+    hf_repo = NLLB_3_3B_HF_REPO if is_3_3b else NLLB_HF_REPO
+    dirname = NLLB_3_3B_CT2_DIRNAME if is_3_3b else NLLB_CT2_DIRNAME
+    size_label = "~6.6 GB" if is_3_3b else "~2.6 GB"
+    display_label = "NLLB-200 3.3B" if is_3_3b else "NLLB-200 1.3B"
+
     INSTALL_STATE["status"] = "installing"
-    INSTALL_STATE["target"] = "nllb"
+    INSTALL_STATE["target"] = "nllb-3.3b" if is_3_3b else "nllb"
     INSTALL_STATE["logs"] = "Step 1/2: Installing transformers, sentencepiece, ctranslate2...\n"
     INSTALL_STATE["error"] = None
 
     python_bin = sys.executable
-    out_dir = _models_dir() / NLLB_CT2_DIRNAME
+    out_dir = _models_dir() / dirname
     env = os.environ.copy()
     env["HF_HOME"] = str(_models_dir() / ".hf_cache")
 
@@ -539,10 +582,10 @@ def _run_nllb_install():
         if proc.wait() != 0:
             raise RuntimeError("pip install failed for transformers/sentencepiece/ctranslate2")
 
-        INSTALL_STATE["logs"] += f"\nStep 2/2: Downloading & converting {NLLB_HF_REPO} to CTranslate2 int8 (~2.6 GB, can take several minutes)...\n"
+        INSTALL_STATE["logs"] += f"\nStep 2/2: Downloading & converting {hf_repo} to CTranslate2 int8 ({size_label}, can take several minutes)...\n"
         convert_cmd = [
             python_bin, "-m", "ctranslate2.converters.transformers",
-            "--model", NLLB_HF_REPO,
+            "--model", hf_repo,
             "--output_dir", str(out_dir),
             "--quantization", "int8",
             "--force"
@@ -560,28 +603,140 @@ def _run_nllb_install():
 
         INSTALL_STATE["logs"] += "\nCaching tokenizer files into the model directory...\n"
         from transformers import AutoTokenizer
-        tok = AutoTokenizer.from_pretrained(NLLB_HF_REPO, src_lang="arb_Arab", cache_dir=env["HF_HOME"])
+        tok = AutoTokenizer.from_pretrained(hf_repo, src_lang="arb_Arab", cache_dir=env["HF_HOME"])
         tok.save_pretrained(str(out_dir))
 
         INSTALL_STATE["status"] = "completed"
-        INSTALL_STATE["logs"] += f"\n✅ NLLB-200 1.3B installed at {out_dir} (CTranslate2 int8, direct Arabic → Urdu, no MLX seq2seq runtime exists so this is the fastest native Apple Silicon option).\n"
+        INSTALL_STATE["logs"] += f"\n✅ {display_label} installed at {out_dir} (CTranslate2 int8, direct Arabic → Urdu, native Apple Silicon CPU).\n"
     except Exception as e:
         INSTALL_STATE["status"] = "failed"
         INSTALL_STATE["error"] = str(e)
-        INSTALL_STATE["logs"] += f"\n❌ NLLB-200 1.3B installation exception: {str(e)}\n"
+        INSTALL_STATE["logs"] += f"\n❌ {display_label} installation exception: {str(e)}\n"
 
 @router.post("/install-nllb")
-async def install_nllb(background_tasks: BackgroundTasks):
+async def install_nllb(background_tasks: BackgroundTasks, variant: str = "1.3b", force: bool = False):
     """
-    Downloads facebook/nllb-200-distilled-1.3B and converts it to a quantized (int8)
-    CTranslate2 model for fast, accurate, direct Arabic -> Urdu translation.
+    Downloads and converts an NLLB-200 variant to a quantized (int8) CTranslate2 model for
+    fast, accurate, direct Arabic -> Urdu translation.
+
+    variant: "1.3b" (default, ~2.6GB, works on any 8GB+ Mac) or "3.3b" (~6.6GB, noticeably
+    higher translation quality, but gated to 32GB+ RAM Macs unless force=True is explicitly
+    passed — this is a real, sizeable download and runtime memory commitment).
     """
     global INSTALL_STATE
     if INSTALL_STATE["status"] == "installing":
         return {"success": False, "message": "An installation is already in progress.", "status": INSTALL_STATE}
 
-    background_tasks.add_task(_run_nllb_install)
-    return {"success": True, "message": "NLLB-200 1.3B download & CTranslate2 conversion started in background.", "status": INSTALL_STATE}
+    if variant not in ("1.3b", "3.3b"):
+        raise HTTPException(status_code=400, detail=f"Unknown NLLB variant: {variant}")
+
+    if variant == "3.3b" and not force:
+        import psutil
+        total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        if total_ram_gb < 28:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"NLLB-200 3.3B is recommended for 32GB+ RAM Macs (detected ~{total_ram_gb:.0f}GB). "
+                    "It needs a ~6.6GB download and noticeably more runtime RAM than the 1.3B default. "
+                    "Pass force=true to install anyway if you understand the tradeoff."
+                )
+            )
+
+    background_tasks.add_task(_run_nllb_install, variant)
+    label = "NLLB-200 3.3B" if variant == "3.3b" else "NLLB-200 1.3B"
+    return {"success": True, "message": f"{label} download & CTranslate2 conversion started in background.", "status": INSTALL_STATE}
+
+
+def _run_madlad_install(variant: str = "10b"):
+    global INSTALL_STATE
+    repo_id = "google/madlad400-10b-mt" if variant == "10b" else "google/madlad400-7b-mt"
+    size_label = "~21 GB" if variant == "10b" else "~14 GB"
+    display_label = "MADLAD-400 10.7B" if variant == "10b" else "MADLAD-400 7B"
+
+    INSTALL_STATE["status"] = "installing"
+    INSTALL_STATE["target"] = f"madlad-{variant}"
+    INSTALL_STATE["logs"] = f"Step 1/2: Installing transformers, sentencepiece, accelerate...\n"
+    INSTALL_STATE["error"] = None
+
+    python_bin = sys.executable
+    env = os.environ.copy()
+    env["HF_HOME"] = str(_models_dir() / ".hf_cache")
+
+    try:
+        pip_cmd = [python_bin, "-m", "pip", "install", "--upgrade", "transformers", "sentencepiece", "accelerate"]
+        INSTALL_STATE["logs"] += f"Executing: {' '.join(pip_cmd)}\n"
+        proc = subprocess.Popen(pip_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in iter(proc.stdout.readline, ''):
+            INSTALL_STATE["logs"] += line
+        proc.stdout.close()
+        if proc.wait() != 0:
+            raise RuntimeError("pip install failed for transformers/sentencepiece/accelerate")
+
+        INSTALL_STATE["logs"] += (
+            f"\nStep 2/2: Downloading {repo_id} ({size_label}, fp16) into the local HuggingFace cache. "
+            f"This can take a long time depending on your connection...\n"
+        )
+        download_cmd = [
+            python_bin, "-c",
+            "import sys; from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; "
+            "repo=sys.argv[1]; "
+            "print(f'Downloading tokenizer for {repo}...', flush=True); "
+            "AutoTokenizer.from_pretrained(repo); "
+            "print(f'Downloading model weights for {repo}...', flush=True); "
+            "AutoModelForSeq2SeqLM.from_pretrained(repo, low_cpu_mem_usage=True); "
+            "print('MADLAD_DOWNLOAD_COMPLETE', flush=True)",
+            repo_id
+        ]
+        proc = subprocess.Popen(download_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        for line in iter(proc.stdout.readline, ''):
+            INSTALL_STATE["logs"] += line
+            if len(INSTALL_STATE["logs"]) > 20000:
+                INSTALL_STATE["logs"] = INSTALL_STATE["logs"][-15000:]
+        proc.stdout.close()
+        rc = proc.wait()
+        if rc != 0 or "MADLAD_DOWNLOAD_COMPLETE" not in INSTALL_STATE["logs"][-2000:]:
+            raise RuntimeError(f"MADLAD download exited with code {rc}")
+
+        INSTALL_STATE["status"] = "completed"
+        INSTALL_STATE["logs"] += f"\n✅ {display_label} weights cached ({repo_id}). Direct Arabic → Urdu via `<2ur>` prefix, fp16 on MPS/CPU.\n"
+    except Exception as e:
+        INSTALL_STATE["status"] = "failed"
+        INSTALL_STATE["error"] = str(e)
+        INSTALL_STATE["logs"] += f"\n❌ {display_label} installation exception: {str(e)}\n"
+
+@router.post("/install-madlad")
+async def install_madlad(background_tasks: BackgroundTasks, variant: str = "10b", force: bool = False):
+    """
+    Pre-downloads Google MADLAD-400 weights into the local HuggingFace cache so the model
+    is ready to use without an unexpected large download happening mid-translation.
+
+    variant: "7b" (~14GB) or "10b" (~21GB, noticeably higher quality per Google's own
+    benchmarks, but gated to 32GB+ RAM Macs unless force=True).
+    """
+    global INSTALL_STATE
+    if INSTALL_STATE["status"] == "installing":
+        return {"success": False, "message": "An installation is already in progress.", "status": INSTALL_STATE}
+
+    if variant not in ("7b", "10b"):
+        raise HTTPException(status_code=400, detail=f"Unknown MADLAD variant: {variant}")
+
+    if variant == "10b" and not force:
+        import psutil
+        total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        if total_ram_gb < 28:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"MADLAD-400 10.7B is recommended for 32GB+ RAM Macs (detected ~{total_ram_gb:.0f}GB). "
+                    "It needs a ~21GB download and significant runtime RAM (fp16, ~21GB resident). "
+                    "Pass force=true to install anyway if you understand the tradeoff."
+                )
+            )
+
+    background_tasks.add_task(_run_madlad_install, variant)
+    label = "MADLAD-400 10.7B" if variant == "10b" else "MADLAD-400 7B"
+    return {"success": True, "message": f"{label} download started in background.", "status": INSTALL_STATE}
 
 
 _QARI_MERGE_SCRIPT = """

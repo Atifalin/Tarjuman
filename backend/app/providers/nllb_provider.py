@@ -161,7 +161,16 @@ class NLLBProvider(AIProvider):
             self._loaded_model_id = model_id
             return
 
-        # 2. Fall back to Transformers pipeline (direct HF download, no conversion)
+        # 2. Fall back to Transformers pipeline (direct HF download, no conversion).
+        # Only auto-download for the default 1.3B model (long-standing behavior). Larger
+        # variants (e.g. 3.3B, ~6.6GB) must be explicitly installed via the Setup Wizard first —
+        # otherwise simply selecting them in a dropdown could silently trigger a large,
+        # unexpected download the user never confirmed.
+        if model_id != DEFAULT_NLLB_MODEL:
+            raise RuntimeError(
+                f"{model_id} CTranslate2 weights not found at {ct2_dir}. "
+                f"Install it first via Setup Wizard before using it as the active model."
+            )
         try:
             import torch
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer

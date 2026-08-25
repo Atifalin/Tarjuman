@@ -26,11 +26,13 @@ import { api } from '../../services/api';
 interface ReviewWorkstationProps {
   activeProject: ProjectRecord | null;
   models: ModelCapability[];
+  onProjectChange?: (project: ProjectRecord) => void;
 }
 
 export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
   activeProject,
-  models
+  models,
+  onProjectChange
 }) => {
   const [currentChunk, setCurrentChunk] = useState<ChunkRecord | null>(null);
   const [editedUrdu, setEditedUrdu] = useState('');
@@ -43,6 +45,8 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
   const [fetchingEnglish, setFetchingEnglish] = useState(false);
   const [allProjectChunks, setAllProjectChunks] = useState<ChunkRecord[]>([]);
   const [resettingStatus, setResettingStatus] = useState(false);
+  const [chunkHistory, setChunkHistory] = useState<string[]>([]);
+  const [goingBack, setGoingBack] = useState(false);
 
   const loadAllChunks = async () => {
     if (!activeProject) return;
@@ -138,7 +142,9 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
     if (!currentChunk || actionLoading) return;
     setActionLoading(true);
     try {
+      const justProcessedId = currentChunk.id;
       await api.approveChunk(currentChunk.id, editedUrdu, saveToTm);
+      setChunkHistory((prev) => [...prev, justProcessedId]);
       await loadNextChunk();
     } catch (e: any) {
       alert(`Approval error: ${e.message}`);
@@ -151,12 +157,31 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
     if (!currentChunk || actionLoading) return;
     setActionLoading(true);
     try {
+      const justProcessedId = currentChunk.id;
       await api.rejectChunk(currentChunk.id);
+      setChunkHistory((prev) => [...prev, justProcessedId]);
       await loadNextChunk();
     } catch (e: any) {
       alert(`Reject error: ${e.message}`);
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleGoBack = async () => {
+    if (!activeProject || chunkHistory.length === 0 || goingBack) return;
+    setGoingBack(true);
+    try {
+      const prevHistory = [...chunkHistory];
+      const prevId = prevHistory.pop()!;
+      const res = await api.getChunkById(activeProject.id, prevId);
+      setChunkHistory(prevHistory);
+      setCurrentChunk(res.chunk);
+      setEditedUrdu(res.chunk.final_urdu || res.chunk.target_urdu || '');
+    } catch (e: any) {
+      alert(`Could not load previous chunk: ${e.message}`);
+    } finally {
+      setGoingBack(false);
     }
   };
 
@@ -190,6 +215,16 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
       alert(`Gemini review error: ${e.message}`);
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handlePrivacyModeChange = async (mode: ProjectRecord['privacy_mode']) => {
+    if (!activeProject || actionLoading) return;
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, { privacy_mode: mode });
+      if (onProjectChange) onProjectChange(updated);
+    } catch (e: any) {
+      alert(`Privacy mode update error: ${e.message}`);
     }
   };
 
@@ -609,8 +644,20 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
       {/* Action Toolbar */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-xl">
         
-        {/* Left: Secondary / Gemini on demand */}
+        {/* Left: Navigation, Secondary / Gemini on demand */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleGoBack}
+            disabled={goingBack || chunkHistory.length === 0}
+            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 text-xs px-3.5 py-2 rounded-xl font-medium transition-colors border border-slate-700"
+            title={chunkHistory.length === 0 ? 'No previous chunk in this session yet' : 'Return to the previous chunk'}
+          >
+            <ChevronLeft className={`w-4 h-4 text-indigo-400 ${goingBack ? 'animate-pulse' : ''}`} />
+            <span>Back to Previous</span>
+          </button>
+
+          <div className="w-px h-6 bg-slate-800 mx-1" />
+
           <button
             onClick={handleGeminiReview}
             disabled={actionLoading}
@@ -621,15 +668,51 @@ export const ReviewWorkstation: React.FC<ReviewWorkstationProps> = ({
             <span>Gemini Review [G]</span>
           </button>
 
-          <button
-            onClick={handleRegenerate}
-            disabled={actionLoading}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3.5 py-2 rounded-xl font-medium transition-colors border border-slate-700"
-            title="Re-translate using local engine"
-          >
-            <RotateCw className={`w-4 h-4 text-indigo-400 ${actionLoading ? 'animate-spin' : ''}`} />
-            <span>Regenerate [R]</span>
-          </button>
+          <div className="flex items-center gap-1.5 bg-slate-900/80 border border-slate-700 rounded-xl px-2.5 py-1.5">
+            <span className="text-xs text-slate-400">Privacy</span>
+            <select
+              value={activeProject.privacy_mode || 'LOCAL_ONLY'}
+              onChange={(e) => handlePrivacyModeChange(e.target.value as ProjectRecord['privacy_mode'])}
+              className="bg-slate-900 text-slate-200 text-xs px-2 py-1 focus:outline-none cursor-pointer rounded border border-slate-700"
+              title="Project privacy mode: which model types are allowed for translation and review"
+            >
+              <option value="LOCAL_ONLY">Local Only</option>
+              <option value="LOCAL_AND_CLOUD">Local + Gemini Cloud</option>
+              <option value="ALLOW_PUBLIC_WEB">Allow Public Web (Google)</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
+            <select
+              value={selectedRegenModel}
+              onChange={(e) => setSelectedRegenModel(e.target.value)}
+              className="bg-slate-800 text-slate-200 text-xs px-2.5 py-2 focus:outline-none cursor-pointer max-w-[180px]"
+              title="Choose which engine to regenerate this chunk with"
+            >
+              <option value="">Default (Project's Primary Model)</option>
+              {models.filter((m) => m.translation_capable).map((m) => {
+                const isPublicOrCloud = m.provider_class === 'PUBLIC_WEB' || m.provider_class === 'CLOUD_AI';
+                const blocked = isPublicOrCloud && activeProject.privacy_mode === 'LOCAL_ONLY';
+                const ramNote = m.minimum_recommended_ram_gb > 16 ? ` (${m.minimum_recommended_ram_gb}GB+ RAM)` : '';
+                return (
+                  <option key={m.model_id} value={m.model_id} disabled={blocked}>
+                    {m.display_name}{ramNote}{blocked ? ' — blocked (Local Only)' : ''}
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              onClick={handleRegenerate}
+              disabled={actionLoading}
+              className={`flex items-center gap-1.5 text-slate-200 text-xs px-3.5 py-2 font-medium transition-colors border-l border-slate-700 ${
+                actionLoading ? 'bg-slate-900 cursor-wait' : 'bg-slate-750 hover:bg-slate-700'
+              }`}
+              title="Re-translate this chunk using the selected engine, bypassing Translation Memory"
+            >
+              <RotateCw className={`w-4 h-4 text-indigo-400 ${actionLoading ? 'animate-spin' : ''}`} />
+              <span>{actionLoading ? 'Regenerating...' : 'Regenerate [R]'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Right: Approve & Reject Primary Buttons */}

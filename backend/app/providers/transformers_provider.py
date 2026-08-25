@@ -29,6 +29,7 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
 
     HF_REPO_MAP = {
         "madlad400-7b-mt": "google/madlad400-7b-mt",
+        "madlad400-10b-mt": "google/madlad400-10b-mt",
     }
 
     def __init__(self):
@@ -98,24 +99,25 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
         t0 = time.perf_counter()
         device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-        # 1. Google MADLAD-400 Seq2Seq Inference
+        # 1. Google MADLAD-400 Seq2Seq Inference (7B or 10B variant)
         if "madlad" in model.lower():
             # MADLAD requires target prefix `<2ur> `
             prepared_text = f"<2ur> {source_text.strip()}"
-            
+            repo_id = self.HF_REPO_MAP.get(model.lower(), self.HF_REPO_MAP["madlad400-7b-mt"])
+
             # Check if weights loaded or in cache
             if model not in self._loaded_models:
                 try:
-                    tok = AutoTokenizer.from_pretrained("google/madlad400-7b-mt")
+                    tok = AutoTokenizer.from_pretrained(repo_id)
                     mdl = AutoModelForSeq2SeqLM.from_pretrained(
-                        "google/madlad400-7b-mt",
+                        repo_id,
                         torch_dtype=torch.float16 if device == "mps" else torch.float32,
                         low_cpu_mem_usage=True
                     ).to(device)
                     self._loaded_tokenizers[model] = tok
                     self._loaded_models[model] = mdl
                 except Exception as e:
-                    raise RuntimeError(f"MADLAD-400 7B MT model weights not available locally in cache: {e}")
+                    raise RuntimeError(f"{repo_id} model weights not available locally in cache: {e}")
 
             tok = self._loaded_tokenizers[model]
             mdl = self._loaded_models[model]

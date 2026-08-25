@@ -1,7 +1,8 @@
 import time
+import asyncio
 import httpx
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from backend.app.providers.base import (
     AIProvider,
     ProviderClass,
@@ -11,6 +12,12 @@ from backend.app.providers.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Silence the httpx request/response logs so the terminal doesn't get spammed with full URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+MAX_QUERY_CHARS = 450
 
 class FreeWebTranslator(AIProvider):
     """
@@ -29,6 +36,60 @@ class FreeWebTranslator(AIProvider):
             "https://translate.plausibility.cloud",
             "https://lingva.thedaviddelta.com"
         ]
+
+    @staticmethod
+    def _chunk_text(text: str, max_chars: int = MAX_QUERY_CHARS) -> list[str]:
+        """Split text into chunks that stay under public web query limits."""
+        words = text.split()
+        chunks: list[str] = []
+        current = ""
+        for w in words:
+            if len(w) > max_chars:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                for i in range(0, len(w), max_chars):
+                    chunks.append(w[i:i + max_chars])
+            elif not current:
+                current = w
+            elif len(current) + 1 + len(w) <= max_chars:
+                current = current + " " + w
+            else:
+                chunks.append(current)
+                current = w
+        if current:
+            chunks.append(current)
+        return chunks
+
+    async def _translate_chunk(self, text: str, src: str, tgt: str, idx: int = 0) -> str:
+        """Translate a single short chunk. Retry Google 429 once, then use MyMemory."""
+        if not text.strip():
+            return ""
+        last_err: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                return await self._translate_google_web(text, src=src, tgt=tgt)
+            except RuntimeError as e:
+                last_err = e
+                if "HTTP 429" in str(e) and attempt == 0:
+                    logger.debug(f"Chunk {idx}: Google Web 429; waiting 1.2s then retrying")
+                    await asyncio.sleep(1.2)
+                    continue
+                break
+
+        # Lingva can only handle short text in a URL path; avoid it for long chunks.
+        if len(text) <= 180:
+            try:
+                return await self._translate_lingva(text, src=src, tgt=tgt)
+            except Exception:
+                pass
+
+        try:
+            return await self._translate_mymemory(text, src=src, tgt=tgt)
+        except Exception as e:
+            status = f"{last_err}" if last_err else f"{e}"
+            logger.warning(f"Chunk {idx} public web translation failed ({status})")
+            raise
 
     def get_provider_name(self) -> str:
         return "public_web"
@@ -89,25 +150,20 @@ class FreeWebTranslator(AIProvider):
 
         start_t = time.time()
         translated_text = ""
-        backend_used = "google_gtx"
+        backend_used = "google_web_unofficial"
 
-        # Tier 1: Google Translate Web (gtx)
-        try:
-            translated_text = await self._translate_google_web(source_text, src="ar", tgt="ur")
-            backend_used = "google_web_unofficial"
-        except Exception as e1:
-            logger.warning(f"Google Web gtx translation failed: {e1}. Trying Lingva fallback...")
-            
-            # Tier 2: Lingva public instances
-            try:
-                translated_text = await self._translate_lingva(source_text, src="ar", tgt="ur")
-                backend_used = "lingva_public"
-            except Exception as e2:
-                logger.warning(f"Lingva translation failed: {e2}. Trying MyMemory fallback...")
-                
-                # Tier 3: MyMemory
-                translated_text = await self._translate_mymemory(source_text, src="ar", tgt="ur")
-                backend_used = "mymemory_public"
+        if len(source_text) > MAX_QUERY_CHARS:
+            # Public web endpoints commonly reject >500-char queries; translate in chunks.
+            chunks: List[str] = self._chunk_text(source_text)
+            parts = []
+            for i, chunk in enumerate(chunks):
+                if i > 0:
+                    await asyncio.sleep(0.5)
+                parts.append(await self._translate_chunk(chunk, src="ar", tgt="ur", idx=i))
+            translated_text = " ".join(parts)
+            backend_used = "public_web_chunked"
+        else:
+            translated_text = await self._translate_chunk(source_text, src="ar", tgt="ur", idx=0)
 
         latency = max(10, int((time.time() - start_t) * 1000))
 
@@ -136,10 +192,16 @@ class FreeWebTranslator(AIProvider):
         if privacy_mode == "LOCAL_ONLY":
             raise RuntimeError("Privacy Guard: Public Web Translation blocked in LOCAL_ONLY mode.")
 
-        try:
-            return await self._translate_google_web(source_text, src="ar", tgt="en")
-        except Exception:
-            return await self._translate_mymemory(source_text, src="ar", tgt="en")
+        if len(source_text) > MAX_QUERY_CHARS:
+            chunks: List[str] = self._chunk_text(source_text)
+            parts = []
+            for i, chunk in enumerate(chunks):
+                if i > 0:
+                    await asyncio.sleep(0.5)
+                parts.append(await self._translate_chunk(chunk, src="ar", tgt="en", idx=i))
+            return " ".join(parts)
+
+        return await self._translate_chunk(source_text, src="ar", tgt="en", idx=0)
 
     async def _translate_google_web(self, text: str, src: str, tgt: str) -> str:
         url = "https://translate.googleapis.com/translate_a/single"
@@ -154,10 +216,13 @@ class FreeWebTranslator(AIProvider):
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(url, params=params, headers=headers)
             if res.status_code != 200:
-                raise RuntimeError(f"Google Web HTTP {res.status_code}: {res.text[:100]}")
+                raise RuntimeError(f"Google Web HTTP {res.status_code}")
             data = res.json()
             sentences = [part[0] for part in data[0] if part and part[0]]
-            return "".join(sentences).strip()
+            translated = "".join(sentences).strip()
+            if "QUERY LENGTH LIMIT" in translated or "MAX ALLOWED QUERY" in translated:
+                raise RuntimeError(f"Google Web rejected query: {translated[:120]}")
+            return translated
 
     async def _translate_lingva(self, text: str, src: str, tgt: str) -> str:
         for base in self._lingva_instances:

@@ -135,6 +135,7 @@ export function App() {
               setIsSimpleMode(false);
               localStorage.setItem('tarjuman_mode', 'advanced');
             }}
+            onOpenWizard={() => setShowWizard(true)}
           />
         ) : (
           <>
@@ -142,6 +143,7 @@ export function App() {
               <ReviewWorkstation
                 activeProject={activeProject}
                 models={models}
+                onProjectChange={(proj) => setActiveProject(proj)}
               />
             )}
 
@@ -154,6 +156,7 @@ export function App() {
                 models={models}
                 onOpenReview={() => setCurrentTab('review')}
                 onOpenBenchmark={() => setCurrentTab('benchmark')}
+                onOpenWizard={() => setShowWizard(true)}
               />
             )}
 

@@ -52,6 +52,13 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
   const [installingNLLB, setInstallingNLLB] = useState(false);
   const [verifyingNLLB, setVerifyingNLLB] = useState(false);
   const [nllbVerifyResult, setNllbVerifyResult] = useState<any | null>(null);
+  const [forceInstall33b, setForceInstall33b] = useState(false);
+
+  // MADLAD-400 10.7B Install & Verify State
+  const [installingMadlad10b, setInstallingMadlad10b] = useState(false);
+  const [verifyingMadlad, setVerifyingMadlad] = useState(false);
+  const [madladVerifyResult, setMadladVerifyResult] = useState<any | null>(null);
+  const [forceInstallMadlad10b, setForceInstallMadlad10b] = useState(false);
 
   // Qari-OCR MLX Install & Verify State
   const [installingMLXOcr, setInstallingMLXOcr] = useState(false);
@@ -85,6 +92,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
         if (data.install_state.target === 'argos') setInstallingArgos(true);
         else if (data.install_state.target === 'nllb') setInstallingNLLB(true);
         else if (data.install_state.target === 'mlx_ocr') setInstallingMLXOcr(true);
+        else if (data.install_state.target?.startsWith('madlad')) setInstallingMadlad10b(true);
         else setInstallingTorch(true);
         setInstallLogs(data.install_state.logs);
       }
@@ -100,7 +108,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
   // Poll install status if installing
   useEffect(() => {
     let interval: any;
-    if (installingTorch || installingArgos || installingNLLB || installingMLXOcr) {
+    if (installingTorch || installingArgos || installingNLLB || installingMLXOcr || installingMadlad10b) {
       interval = setInterval(async () => {
         try {
           const st = await api.getInstallStatus();
@@ -110,6 +118,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
             setInstallingArgos(false);
             setInstallingNLLB(false);
             setInstallingMLXOcr(false);
+            setInstallingMadlad10b(false);
             fetchDependencies();
             onRefreshStatus();
           }
@@ -119,7 +128,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       }, 1500);
     }
     return () => clearInterval(interval);
-  }, [installingTorch, installingArgos, installingNLLB, installingMLXOcr]);
+  }, [installingTorch, installingArgos, installingNLLB, installingMLXOcr, installingMadlad10b]);
 
   const handleInstallPyTorch = async () => {
     setInstallingTorch(true);
@@ -150,10 +159,34 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     setShowLogs(true);
     setInstallLogs('Initiating NLLB-200 1.3B download & CTranslate2 int8 conversion (~2.6 GB)...\n');
     try {
-      await api.installNLLB();
+      await api.installNLLB('1.3b');
     } catch (e: any) {
       alert(`Install error: ${e.message}`);
       setInstallingNLLB(false);
+    }
+  };
+
+  const handleInstallNLLB33b = async () => {
+    setInstallingNLLB(true);
+    setShowLogs(true);
+    setInstallLogs('Initiating NLLB-200 3.3B download & CTranslate2 int8 conversion (~6.6 GB)...\n');
+    try {
+      await api.installNLLB('3.3b', forceInstall33b);
+    } catch (e: any) {
+      alert(`Install error: ${e.message}`);
+      setInstallingNLLB(false);
+    }
+  };
+
+  const handleInstallMadlad10b = async () => {
+    setInstallingMadlad10b(true);
+    setShowLogs(true);
+    setInstallLogs('Initiating Google MADLAD-400 10.7B download into HF cache (~21 GB)...\n');
+    try {
+      await api.installMadlad('10b', forceInstallMadlad10b);
+    } catch (e: any) {
+      alert(`Install error: ${e.message}`);
+      setInstallingMadlad10b(false);
     }
   };
 
@@ -229,11 +262,11 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     }
   };
 
-  const handleVerifyNLLB = async () => {
+  const handleVerifyNLLB = async (modelId: string = 'nllb-200-distilled-1.3b') => {
     setVerifyingNLLB(true);
     setNllbVerifyResult(null);
     try {
-      const res = await api.testModel('nllb', 'nllb-200-distilled-1.3b');
+      const res = await api.testModel('nllb', modelId);
       setNllbVerifyResult(res);
       await fetchDependencies();
       onRefreshStatus();
@@ -521,7 +554,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                         </button>
                       ) : (
                         <button
-                          onClick={handleVerifyNLLB}
+                          onClick={() => handleVerifyNLLB('nllb-200-distilled-1.3b')}
                           disabled={verifyingNLLB}
                           className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700 font-mono"
                         >
@@ -537,6 +570,119 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                       {nllbVerifyResult.output || nllbVerifyResult.message || nllbVerifyResult.error || JSON.stringify(nllbVerifyResult)}
                     </div>
                   )}
+                </div>
+
+                {/* Meta NLLB-200 3.3B (higher quality, 32GB+ RAM recommended) */}
+                <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-200">Meta NLLB-200 3.3B (Higher Quality)</span>
+                        <span className="text-[10px] text-indigo-300 font-mono bg-indigo-950/80 px-1.5 py-0.2 rounded border border-indigo-800">
+                          32GB+ RAM Recommended
+                        </span>
+                        {deps?.readiness_matrix?.['nllb-200-3.3b']?.ready ? (
+                          <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-bold font-mono">
+                            ✓ READY (OFFLINE)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-rose-950 text-rose-300 border border-rose-800 px-2 py-0.5 rounded font-bold font-mono">
+                            NOT INSTALLED (~6.6 GB)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {deps?.readiness_matrix?.['nllb-200-3.3b']?.reason || 'Noticeably better translation quality than the 1.3B default — worth using if you have the RAM and disk space to spare.'}
+                      </p>
+                      {!deps?.readiness_matrix?.['nllb-200-3.3b']?.ready && (metrics?.total_ram_gb ?? 0) < 28 && (
+                        <label className="flex items-center gap-1.5 mt-1.5 text-[11px] text-amber-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={forceInstall33b}
+                            onChange={(e) => setForceInstall33b(e.target.checked)}
+                            className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                          />
+                          <span>I understand this Mac has less than 32GB RAM and want to install anyway.</span>
+                        </label>
+                      )}
+                    </div>
+
+                    <div>
+                      {!deps?.readiness_matrix?.['nllb-200-3.3b']?.ready ? (
+                        <button
+                          onClick={handleInstallNLLB33b}
+                          disabled={installingNLLB || ((metrics?.total_ram_gb ?? 0) < 28 && !forceInstall33b)}
+                          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs px-3.5 py-1.5 rounded-lg font-bold shadow-md transition-all whitespace-nowrap"
+                          title={(metrics?.total_ram_gb ?? 0) < 28 ? 'Check the box below to confirm you want to install on <32GB RAM' : undefined}
+                        >
+                          {installingNLLB ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                          <span>{installingNLLB ? 'Downloading & Converting...' : 'Install NLLB-200 3.3B (~6.6 GB)'}</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleVerifyNLLB('nllb-200-3.3b')}
+                          disabled={verifyingNLLB}
+                          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700 font-mono"
+                        >
+                          {verifyingNLLB ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 text-emerald-400 inline mr-1" />}
+                          Verify NLLB
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Google MADLAD-400 10.7B (higher quality seq2seq) */}
+                <div className="bg-slate-900/80 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-200">Google MADLAD-400 10.7B</span>
+                        <span className="text-[10px] text-amber-300 font-mono bg-amber-950/80 px-1.5 py-0.2 rounded border border-amber-800">
+                          32GB+ RAM Required
+                        </span>
+                        {deps?.readiness_matrix?.['madlad400-10b-mt']?.ready ? (
+                          <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-bold font-mono">
+                            ✓ READY (OFFLINE)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-rose-950 text-rose-300 border border-rose-800 px-2 py-0.5 rounded font-bold font-mono">
+                            NOT INSTALLED (~21 GB)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {deps?.readiness_matrix?.['madlad400-10b-mt']?.reason || 'Higher-quality direct Arabic → Urdu sequence-to-sequence model. Requires PyTorch and ~21 GB of disk space (fp16 cached weights).'}
+                      </p>
+                      {!deps?.readiness_matrix?.['madlad400-10b-mt']?.ready && (metrics?.total_ram_gb ?? 0) < 28 && (
+                        <label className="flex items-center gap-1.5 mt-1.5 text-[11px] text-amber-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={forceInstallMadlad10b}
+                            onChange={(e) => setForceInstallMadlad10b(e.target.checked)}
+                            className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                          />
+                          <span>I understand this Mac has less than 32GB RAM and want to install anyway.</span>
+                        </label>
+                      )}
+                    </div>
+
+                    <div>
+                      {!deps?.readiness_matrix?.['madlad400-10b-mt']?.ready ? (
+                        <button
+                          onClick={handleInstallMadlad10b}
+                          disabled={installingMadlad10b || ((metrics?.total_ram_gb ?? 0) < 28 && !forceInstallMadlad10b)}
+                          className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs px-3.5 py-1.5 rounded-lg font-bold shadow-md transition-all whitespace-nowrap"
+                          title={(metrics?.total_ram_gb ?? 0) < 28 ? 'Check the box below to confirm you want to install on <32GB RAM' : undefined}
+                        >
+                          {installingMadlad10b ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                          <span>{installingMadlad10b ? 'Downloading...' : 'Install MADLAD-400 10.7B (~21 GB)'}</span>
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-mono text-emerald-400 font-bold">Cached & ready</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* PyTorch & Transformers */}
@@ -783,14 +929,14 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
               </div>
 
               {/* Live Installation Progress Terminal */}
-              {(installingTorch || installingArgos || installingNLLB || installingMLXOcr || installLogs) && (
+              {(installingTorch || installingArgos || installingNLLB || installingMLXOcr || installingMadlad10b || installLogs) && (
                 <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-bold text-slate-200 flex items-center gap-1.5">
                       <Terminal className="w-4 h-4 text-emerald-400" />
                       Live Installation & Download Logs
                     </span>
-                    {(installingTorch || installingArgos || installingNLLB || installingMLXOcr) && (
+                    {(installingTorch || installingArgos || installingNLLB || installingMLXOcr || installingMadlad10b) && (
                       <span className="flex items-center gap-1.5 text-emerald-400 font-mono text-[11px] font-bold">
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" /> In Progress...
                       </span>

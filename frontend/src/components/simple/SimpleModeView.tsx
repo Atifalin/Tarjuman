@@ -36,13 +36,15 @@ interface SimpleModeViewProps {
   onSelectProject: (proj: ProjectRecord) => void;
   models: ModelCapability[];
   onSwitchToAdvanced: () => void;
+  onOpenWizard: () => void;
 }
 
 export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
   activeProject,
   onSelectProject,
   models,
-  onSwitchToAdvanced
+  onSwitchToAdvanced,
+  onOpenWizard
 }) => {
   // Step in the simple 5-step flow: 1: Upload, 2: Model Check, 3: Run, 4: Review, 5: Export
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -239,6 +241,21 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
   };
   const isUsingUninstalledPrimary = !!activeProject && activeProject.primary_model_id !== 'nllb-200-distilled-1.3b' &&
     !deps?.readiness_matrix?.[activeProject.primary_model_id]?.ready;
+
+  const handleChangePrimaryModel = async (modelId: string) => {
+    if (!activeProject || !modelId || modelId === activeProject.primary_model_id) return;
+    setSwitchingModel(true);
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, { primary_model_id: modelId });
+      onSelectProject(updated);
+      const arb = await api.getArbiterEngines();
+      setArbiter(arb);
+    } catch (e: any) {
+      alert(`Failed to switch model: ${e.message}`);
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
 
   const [switchingMode, setSwitchingMode] = useState(false);
   const handleEnableContinuousMode = async () => {
@@ -520,12 +537,54 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
                   {arbiter?.translation.ready ? '✓ READY' : 'INSTALL REQUIRED'}
                 </span>
               </div>
-              <p className="text-xs text-slate-300">
-                Primary: <strong>Meta NLLB-200 1.3B</strong> (Direct ar → ur) | Fallback: <strong>Argos Translate</strong> (ar → en → ur).
-              </p>
-              <div className="text-[11px] font-mono text-slate-400 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
-                Active Selection: {arbiter?.translation.label || 'Argos Translate'}
+
+              <div>
+                <label className="text-[11px] text-slate-400 block mb-1">Model to use for this project</label>
+                <select
+                  value={activeProject?.primary_model_id || ''}
+                  onChange={(e) => handleChangePrimaryModel(e.target.value)}
+                  disabled={switchingModel}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 font-mono disabled:opacity-50"
+                >
+                  {models.filter((m) => m.translation_capable).map((m) => {
+                    const ready = deps?.readiness_matrix?.[m.model_id]?.ready;
+                    const isPublicOrCloud = m.provider_class === 'PUBLIC_WEB' || m.provider_class === 'CLOUD_AI';
+                    const blocked = isPublicOrCloud && activeProject?.privacy_mode === 'LOCAL_ONLY';
+                    const ramNote = m.minimum_recommended_ram_gb > 16 ? ` (${m.minimum_recommended_ram_gb}GB+ RAM)` : '';
+                    return (
+                      <option key={m.model_id} value={m.model_id} disabled={blocked}>
+                        {ready ? '✓ ' : '○ '}{m.display_name}{ramNote}{ready ? '' : ' (not downloaded)'}{blocked ? ' — blocked (Local Only)' : ''}
+                      </option>
+                    );
+                  })}
+                </select>
               </div>
+
+              {activeProject && deps?.readiness_matrix?.[activeProject.primary_model_id] && (
+                <div className={`text-[11px] rounded-xl p-2.5 border ${
+                  deps.readiness_matrix[activeProject.primary_model_id].ready
+                    ? 'bg-slate-900 border-slate-800 text-slate-400 font-mono'
+                    : 'bg-amber-950/40 border-amber-800 text-amber-200'
+                }`}>
+                  {deps.readiness_matrix[activeProject.primary_model_id].ready
+                    ? `Active Selection: ${arbiter?.translation.label || activeProject.primary_model_id}`
+                    : (
+                      <div className="flex items-center justify-between gap-2">
+                        <span>{deps.readiness_matrix[activeProject.primary_model_id].reason}</span>
+                        <button
+                          onClick={onOpenWizard}
+                          className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1 rounded-lg whitespace-nowrap"
+                        >
+                          Download in Setup Wizard
+                        </button>
+                      </div>
+                    )}
+                </div>
+              )}
+
+              <p className="text-[11px] text-slate-500">
+                Fallback if the selected model fails: <strong>Argos Translate</strong> (ar → en → ur, fully offline).
+              </p>
             </div>
           </div>
 

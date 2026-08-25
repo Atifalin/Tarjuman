@@ -219,17 +219,33 @@ class ArgosProvider(AIProvider):
         return await self.translate_arabic_to_urdu(source_text)
 
     async def translate_arabic_to_english(self, source_text: str) -> str:
-        """Translates Arabic -> English directly for the English Reference bridge."""
-        argos = self._check_argos_import()
-        if not argos:
-            raise RuntimeError("Argos Translate is not installed.")
+        """Translates Arabic -> English directly using the ar_en CTranslate2 model."""
+        if not self._packages_installed():
+            raise RuntimeError(
+                "Argos packages for Arabic -> English are not installed. "
+                "Please click 'Install Argos (~90 MB)' in Setup Wizard."
+            )
+        if not source_text.strip():
+            return ""
 
-        installed_languages = argos.translate.get_installed_languages()
-        from_lang = next((l for l in installed_languages if l.code == "ar"), None)
-        to_lang = next((l for l in installed_languages if l.code == "en"), None)
+        self._init_models()
+        lines = [line.strip() for line in source_text.split("\n") if line.strip()]
+        sents = []
+        for line in lines:
+            sents.extend([s.strip() for s in re.split(r'([.؟!؛]+)', line) if s.strip()])
+        if not sents:
+            sents = [source_text.strip()]
 
-        if not (from_lang and to_lang):
-            raise RuntimeError("Argos ar_en language package missing.")
+        combined = []
+        for i in range(0, len(sents) - 1, 2):
+            combined.append(sents[i] + sents[i + 1])
+        if len(sents) % 2 == 1:
+            combined.append(sents[-1])
 
-        trans = from_lang.get_translation(to_lang)
-        return trans.translate(source_text).strip()
+        ar_tokens = [self._sp_ar_en.encode(s, out_type=str) for s in combined]
+        ar_res = self._tr_ar_en.translate_batch(ar_tokens, max_decoding_length=256)
+        en_sentences = [
+            self._sp_ar_en.decode(r.hypotheses[0]).replace("▁", " ").strip()
+            for r in ar_res
+        ]
+        return " ".join(en_sentences)

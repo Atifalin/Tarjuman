@@ -55,6 +55,7 @@ class ProjectModelUpdate(BaseModel):
     reviewer_model_id: Optional[str] = None
     gemini_model_id: Optional[str] = None
     mode: Optional[str] = None  # review, automatic, hybrid
+    privacy_mode: Optional[str] = None  # LOCAL_ONLY, LOCAL_AND_CLOUD, ALLOW_PUBLIC_WEB
 
 @router.patch("/{project_id}/models")
 def update_project_models(project_id: str, req: ProjectModelUpdate):
