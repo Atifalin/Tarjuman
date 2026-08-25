@@ -78,22 +78,26 @@ class TranslationRouter:
         routing_strategy: str = "local_only",
         production_policy: str = "BALANCED",
         privacy_mode: str = "LOCAL_ONLY",
-        primary_model_id: str = "madlad400-7b-mt",
+        primary_model_id: str = "nllb-200-distilled-1.3b",
         secondary_model_id: Optional[str] = None,
         reviewer_model_id: Optional[str] = "qwen3:8b",
         gemini_model_id: str = "gemini-3.6-flash",
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        bypass_tm: bool = False
     ) -> Dict[str, Any]:
         """
         Executes end-to-end chunk translation, checking TM, Glossary, QA, and adaptive escalation.
         Returns comprehensive result dictionary with unbroken provenance.
+        Set bypass_tm=True to force a fresh translation (e.g. explicit "Regenerate") even if an
+        identical source text was previously approved and cached in Translation Memory.
         """
         # 1. Check Translation Memory for identical approved text
-        tm_match = TranslationMemory.lookup_exact_match(source_arabic)
+        tm_match = None if bypass_tm else TranslationMemory.lookup_exact_match(source_arabic)
         glossary_terms = TerminologyManager.match_terms_in_text(source_arabic, project_id=project_id)
 
         if tm_match:
             qa_res = QAEngine.evaluate(source_arabic, tm_match.approved_urdu, glossary_terms)
+            original_model = tm_match.source_model or "unknown (pre-provenance-tracking)"
             return {
                 "source_text": source_arabic,
                 "target_urdu": tm_match.approved_urdu,
@@ -104,7 +108,7 @@ class TranslationRouter:
                 "qa_issues": qa_res.issues,
                 "primary_provider": "TranslationMemory",
                 "primary_provider_class": "LOCAL_MT",
-                "primary_model": "TM-ExactMatch",
+                "primary_model": f"TM-ExactMatch (originally: {original_model})",
                 "execution_backend": "sqlite_exact_match",
                 "route": "Translation Memory (Exact Match)",
                 "is_pivot": False,
@@ -156,10 +160,18 @@ class TranslationRouter:
                 t_res = await primary_prov.translate(source_arabic, model=primary_model_id)
         except Exception as e:
             logger.warning(f"Primary model {primary_model_id} execution failed: {e}. Triggering automatic local fallback.")
-            if not isinstance(primary_prov, ArgosProvider):
-                t_res = await self.argos.translate_arabic_to_urdu(source_arabic)
-            else:
+            if isinstance(primary_prov, ArgosProvider):
                 raise e
+            elif not isinstance(primary_prov, NLLBProvider):
+                # Prefer direct NLLB-200 (ar -> ur) over Argos's lossy ar -> en -> ur pivot
+                nllb_avail = await self.nllb.check_availability()
+                if nllb_avail.is_available:
+                    logger.info(f"Falling back to NLLB-200 (direct ar -> ur) after {primary_model_id} failure.")
+                    t_res = await self.nllb.translate_arabic_to_urdu(source_arabic)
+                else:
+                    t_res = await self.argos.translate_arabic_to_urdu(source_arabic)
+            else:
+                t_res = await self.argos.translate_arabic_to_urdu(source_arabic)
 
         target_urdu = t_res.translated_text
         latency_total_ms = t_res.latency_ms

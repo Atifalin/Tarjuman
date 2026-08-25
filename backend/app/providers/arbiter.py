@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any
 from backend.app.hardware.monitor import HardwareMonitor
 from backend.app.pdf.qwen_vl_ocr import QwenVLOCRProvider
+from backend.app.pdf.mlx_ocr_provider import MLXOCRProvider
 from backend.app.pdf.ocr import OCRProvider
 from backend.app.providers.nllb_provider import NLLBProvider
 from backend.app.providers.argos_provider import ArgosProvider
@@ -25,23 +26,28 @@ class ResourceArbiter:
         mem_pressure = hw.get("memory_pressure", "GREEN")
         ram_percent = hw.get("ram_percent", 50.0)
 
-        # 1. Evaluate OCR Engine Chain: Qwen2-VL -> Apple Vision OCR
+        # 1. Evaluate OCR Engine Chain: Qari MLX -> Qwen2-VL -> Apple Vision OCR
+        mlx_ocr_avail = await MLXOCRProvider.check_availability()
         qwen_avail = await QwenVLOCRProvider.check_availability()
-        
-        # If Qwen2-VL is available and RAM is not critical (<85%), use Qwen2-VL
-        if qwen_avail.get("is_available") and ram_percent < 85.0 and mem_pressure != "RED":
+
+        if mlx_ocr_avail.get("is_available") and ram_percent < 85.0 and mem_pressure != "RED":
+            ocr_engine = "qari-ocr-0.4.0-vl-4b"
+            ocr_is_fallback = False
+            ocr_label = "Qari-OCR-0.4.0 (MLX)"
+            ocr_reason = "Primary native Arabic manuscript OCR (MLX)"
+        elif qwen_avail.get("is_available") and ram_percent < 85.0 and mem_pressure != "RED":
             ocr_engine = "qwen2_vl"
             ocr_is_fallback = False
             ocr_label = f"Qwen2-VL ({qwen_avail.get('model_name', '7B')})"
-            ocr_reason = "Primary Vision-Language OCR"
+            ocr_reason = "Secondary Vision-Language OCR"
         else:
             ocr_engine = "apple_vision"
             ocr_is_fallback = True
             ocr_label = "Apple Vision OCR (Fallback)"
-            if qwen_avail.get("is_available"):
+            if mlx_ocr_avail.get("is_available") and qwen_avail.get("is_available"):
                 ocr_reason = f"Fallback triggered (High Memory: {ram_percent}%)"
             else:
-                ocr_reason = "Fallback triggered (Qwen2-VL not pulled in Ollama)"
+                ocr_reason = "Fallback triggered (no local vision model pulled/running)"
 
         # 2. Evaluate Translation Engine Chain: NLLB-200 -> Argos Translate
         nllb_prov = NLLBProvider()
@@ -51,10 +57,10 @@ class ResourceArbiter:
         argos_avail = await argos_prov.check_availability()
 
         if nllb_avail.is_available:
-            trans_engine = "nllb-200-3.3b"
+            trans_engine = "nllb-200-distilled-1.3b"
             trans_is_fallback = False
-            trans_label = "Meta NLLB-200 (Direct ar → ur)"
-            trans_route = "ar -> ur (Direct)"
+            trans_label = "Meta NLLB-200 1.3B (Direct ar → ur)"
+            trans_route = "arb_Arab -> urd_Arab (CTranslate2 int8)"
             trans_ready = True
         elif argos_avail.is_available:
             trans_engine = "argos-translate"

@@ -48,12 +48,16 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
   const [verifyingArgos, setVerifyingArgos] = useState(false);
   const [argosVerifyResult, setArgosVerifyResult] = useState<ArgosVerifyResponse | null>(null);
 
-  // NLLB-200 1.3B Install State
+  // NLLB-200 1.3B Install & Verify State
   const [installingNLLB, setInstallingNLLB] = useState(false);
+  const [verifyingNLLB, setVerifyingNLLB] = useState(false);
+  const [nllbVerifyResult, setNllbVerifyResult] = useState<any | null>(null);
 
-  // Qari-OCR MLX Install State
+  // Qari-OCR MLX Install & Verify State
   const [installingMLXOcr, setInstallingMLXOcr] = useState(false);
   const [startingMLXServer, setStartingMLXServer] = useState(false);
+  const [verifyingQari, setVerifyingQari] = useState(false);
+  const [qariVerifyResult, setQariVerifyResult] = useState<any | null>(null);
   const [mlxServerMsg, setMlxServerMsg] = useState<string | null>(null);
 
   // Ollama State
@@ -180,6 +184,21 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     }
   };
 
+  const handleVerifyQari = async () => {
+    setVerifyingQari(true);
+    setQariVerifyResult(null);
+    try {
+      const res = await api.verifyQariOCR();
+      setQariVerifyResult(res);
+      await fetchDependencies();
+      onRefreshStatus();
+    } catch (e: any) {
+      setQariVerifyResult({ success: false, message: e.message });
+    } finally {
+      setVerifyingQari(false);
+    }
+  };
+
   const handleVerifyArgos = async () => {
     setVerifyingArgos(true);
     setArgosVerifyResult(null);
@@ -207,6 +226,21 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       setVerifyResult({ success: false, installed: false, mps_available: false, message: e.message });
     } finally {
       setVerifyingTorch(false);
+    }
+  };
+
+  const handleVerifyNLLB = async () => {
+    setVerifyingNLLB(true);
+    setNllbVerifyResult(null);
+    try {
+      const res = await api.testModel('nllb', 'nllb-200-distilled-1.3b');
+      setNllbVerifyResult(res);
+      await fetchDependencies();
+      onRefreshStatus();
+    } catch (e: any) {
+      setNllbVerifyResult({ success: false, error: e.message });
+    } finally {
+      setVerifyingNLLB(false);
     }
   };
 
@@ -476,7 +510,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     </div>
 
                     <div>
-                      {!deps?.readiness_matrix?.['nllb-200-distilled-1.3b']?.ready && (
+                      {!deps?.readiness_matrix?.['nllb-200-distilled-1.3b']?.ready ? (
                         <button
                           onClick={handleInstallNLLB}
                           disabled={installingNLLB}
@@ -485,9 +519,24 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                           {installingNLLB ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                           <span>{installingNLLB ? 'Downloading & Converting...' : 'Install NLLB-200 1.3B (~2.6 GB)'}</span>
                         </button>
+                      ) : (
+                        <button
+                          onClick={handleVerifyNLLB}
+                          disabled={verifyingNLLB}
+                          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700 font-mono"
+                        >
+                          {verifyingNLLB ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 text-emerald-400 inline mr-1" />}
+                          Verify NLLB
+                        </button>
                       )}
                     </div>
                   </div>
+
+                  {nllbVerifyResult && (
+                    <div className={`text-xs p-2 rounded-lg border ${nllbVerifyResult.success ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/40 border-rose-500/40 text-rose-300'}`}>
+                      {nllbVerifyResult.output || nllbVerifyResult.message || nllbVerifyResult.error || JSON.stringify(nllbVerifyResult)}
+                    </div>
+                  )}
                 </div>
 
                 {/* PyTorch & Transformers */}
@@ -506,7 +555,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                       )}
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Required for <strong>MADLAD-400 7B MT</strong> (`&lt;2ur&gt;`) and <strong>Meta NLLB-200 3.3B</strong>.
+                      Runtime installed. MADLAD-400 7B weights are <strong>not downloaded</strong> (optional). Used as fallback for NLLB-200 variants if CTranslate2 weights are missing.
                     </p>
                   </div>
                   <div>
@@ -640,6 +689,23 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                       {mlxServerMsg}
                     </div>
                   )}
+                  {deps?.mlx?.server_running && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleVerifyQari}
+                        disabled={verifyingQari}
+                        className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700 font-mono"
+                      >
+                        {verifyingQari ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3 text-emerald-400 inline mr-1" />}
+                        Verify Qari
+                      </button>
+                    </div>
+                  )}
+                  {qariVerifyResult && (
+                    <div className={`text-xs p-2 rounded-lg border ${qariVerifyResult.success ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/40 border-rose-500/40 text-rose-300'}`}>
+                      {qariVerifyResult.message || qariVerifyResult.error || JSON.stringify(qariVerifyResult)}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -757,7 +823,6 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     mId === 'argos-translate' ? 'Argos Translate (CTranslate2 Pivot ar→en→ur)' :
                     mId === 'apple-native-translation' ? 'Apple Native Translation (ar → en Reference)' :
                     mId === 'madlad400-7b-mt' ? 'Google MADLAD-400 7B MT' :
-                    mId === 'nllb-200-3.3b' ? 'Meta NLLB-200 3.3B Distilled' :
                     mId === 'qwen3:8b' ? 'Qwen3 8B Instruct' :
                     mId
                   );
@@ -824,14 +889,11 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                         <option value="argos|argos-translate">
                           Argos Translate (CTranslate2 Pivot ar→en→ur) — {providerStatus?.providers.argos?.is_available ? '✓ AVAILABLE' : 'NOT INSTALLED'}
                         </option>
-                        <option value="transformers|nllb-200-distilled-1.3b">
+                        <option value="nllb|nllb-200-distilled-1.3b">
                           Meta NLLB-200 1.3B ({deps?.readiness_matrix?.['nllb-200-distilled-1.3b']?.ready ? '✓ READY' : 'NOT INSTALLED'})
                         </option>
-                        <option value="transformers|nllb-200-3.3b">
-                          Meta NLLB-200 3.3B ({deps?.pytorch.installed ? '✓ INSTALLED' : 'PYTORCH MISSING'})
-                        </option>
                         <option value="transformers|madlad400-7b-mt">
-                          Google MADLAD-400 7B MT ({deps?.pytorch.installed ? '✓ INSTALLED' : 'PYTORCH MISSING'})
+                          Google MADLAD-400 7B MT — ⚠️ Triggers ~14GB download if not cached ({deps?.pytorch.installed ? 'runtime installed' : 'PYTORCH MISSING'})
                         </option>
                       </optgroup>
 

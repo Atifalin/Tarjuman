@@ -50,9 +50,9 @@ class HardwareMonitor:
             # On macOS unified memory, swap activity + high usage indicates pressure
             swap = psutil.swap_memory()
             
-            if vm.percent > 90 or swap.used > 2 * 1024 * 1024 * 1024:  # >2GB swap
+            if vm.percent > 95 or swap.used > 6 * 1024 * 1024 * 1024:  # >6GB swap
                 return "RED"
-            elif vm.percent > 78 or swap.used > 500 * 1024 * 1024:  # >500MB swap
+            elif vm.percent > 85 or swap.used > 1.5 * 1024 * 1024 * 1024:  # >1.5GB swap
                 return "YELLOW"
             else:
                 return "GREEN"

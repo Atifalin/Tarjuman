@@ -91,9 +91,8 @@ class MemorySafetyGuard:
 
     @classmethod
     def get_recommended_primary_model(cls) -> str:
-        """Automatically selects genuinely compatible model based on physical RAM."""
-        hw = HardwareMonitor.get_hardware_status()
-        if hw["hardware_profile"] == "16GB_COMPATIBLE":
-            # On 16GB machines, FP16 MADLAD (14GB) exceeds safe headroom -> default to NLLB-200 1.3B (CTranslate2 int8)
-            return "nllb-200-distilled-1.3b"
-        return "madlad400-7b-mt"
+        """Automatically selects genuinely compatible model based on physical RAM.
+        NLLB-200 1.3B (CTranslate2 int8) is the safe, always-recommended default across
+        all Apple Silicon profiles — MADLAD-400 7B is only used if a user explicitly
+        downloads and selects it (huge ~14GB download, not auto-selected)."""
+        return "nllb-200-distilled-1.3b"

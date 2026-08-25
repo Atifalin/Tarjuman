@@ -118,11 +118,13 @@ def approve_chunk(req: ApproveRequest):
     now_str = datetime.now().isoformat()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT source_text FROM chunks WHERE id = ?;", (req.chunk_id,))
+        cursor.execute("SELECT source_text, primary_provider, primary_model FROM chunks WHERE id = ?;", (req.chunk_id,))
         row = cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Chunk not found")
         source_text = row["source_text"]
+        source_provider = row["primary_provider"]
+        source_model = row["primary_model"]
 
         conn.execute("""
         UPDATE chunks SET
@@ -135,7 +137,7 @@ def approve_chunk(req: ApproveRequest):
         """, (req.final_urdu, now_str, now_str, req.chunk_id))
 
     if req.save_to_tm and req.final_urdu.strip():
-        TranslationMemory.save_approved_translation(source_text, req.final_urdu.strip())
+        TranslationMemory.save_approved_translation(source_text, req.final_urdu.strip(), source_provider, source_model)
 
     return {"success": True, "message": "Chunk approved and saved to Translation Memory."}
 
@@ -231,7 +233,8 @@ async def regenerate_chunk(req: RegenerateRequest):
             secondary_model_id=proj["secondary_model_id"],
             reviewer_model_id=proj["reviewer_model_id"],
             gemini_model_id=proj["gemini_model_id"] or "gemini-3.6-flash",
-            project_id=chunk["project_id"]
+            project_id=chunk["project_id"],
+            bypass_tm=True
         )
     except Exception as e:
         err_msg = str(e)

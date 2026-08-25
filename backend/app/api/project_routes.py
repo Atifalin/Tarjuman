@@ -49,6 +49,38 @@ async def create_project(req: ProjectCreate, background_tasks: BackgroundTasks):
         row = cursor.fetchone()
         return ProjectRecord(**dict(row))
 
+class ProjectModelUpdate(BaseModel):
+    primary_model_id: Optional[str] = None
+    secondary_model_id: Optional[str] = None
+    reviewer_model_id: Optional[str] = None
+    gemini_model_id: Optional[str] = None
+    mode: Optional[str] = None  # review, automatic, hybrid
+
+@router.patch("/{project_id}/models")
+def update_project_models(project_id: str, req: ProjectModelUpdate):
+    """Updates the translation engine configuration (and optionally the processing mode)
+    for an existing project — e.g. switch away from a heavy model that was never
+    downloaded, or switch out of 'review' mode (which intentionally stops after every
+    single chunk to wait for human approval) into 'hybrid' mode for continuous queue
+    processing — without recreating the project."""
+    updates = {k: (None if v == "" else v) for k, v in req.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No model fields provided to update.")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM projects WHERE id = ?;", (project_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [datetime.now().isoformat(), project_id]
+        conn.execute(f"UPDATE projects SET {set_clause}, updated_at = ? WHERE id = ?;", values)
+
+        cursor.execute("SELECT * FROM projects WHERE id = ?;", (project_id,))
+        row = cursor.fetchone()
+        return ProjectRecord(**dict(row))
+
 @router.get("/{project_id}")
 def get_project_details(project_id: str):
     with get_db() as conn:
@@ -106,6 +138,61 @@ def list_project_documents(project_id: str):
         cursor.execute("SELECT * FROM documents WHERE project_id = ? ORDER BY filename ASC;", (project_id,))
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
+
+@router.get("/{project_id}/documents/{document_id}/transcript")
+def get_document_transcript(project_id: str, document_id: str):
+    """
+    Returns the raw OCR/extracted Arabic source text for every chunk of a document, in
+    page/chunk order, along with which OCR engine produced each chunk. Lets a user grab
+    just the transcription (e.g. Qari-OCR output) without needing to run translation.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, filename FROM documents WHERE id = ? AND project_id = ?;", (document_id, project_id))
+        doc = cursor.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        cursor.execute("""
+        SELECT page_number, chunk_index, source_text, ocr_engine, ocr_timestamp
+        FROM chunks WHERE document_id = ?
+        ORDER BY page_number ASC, chunk_index ASC;
+        """, (document_id,))
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        engines_used = sorted({r["ocr_engine"] for r in rows if r["ocr_engine"]})
+        full_text = "\n\n".join(r["source_text"] for r in rows if r["source_text"])
+
+        return {
+            "document_id": document_id,
+            "filename": doc["filename"],
+            "chunks": rows,
+            "full_text": full_text,
+            "ocr_engines_used": engines_used
+        }
+
+@router.get("/{project_id}/documents/{document_id}/transcript.txt")
+def download_document_transcript(project_id: str, document_id: str):
+    from fastapi.responses import PlainTextResponse
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, filename FROM documents WHERE id = ? AND project_id = ?;", (document_id, project_id))
+        doc = cursor.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        cursor.execute("""
+        SELECT source_text FROM chunks WHERE document_id = ?
+        ORDER BY page_number ASC, chunk_index ASC;
+        """, (document_id,))
+        full_text = "\n\n".join(r["source_text"] for r in cursor.fetchall() if r["source_text"])
+
+    base_name = os.path.splitext(doc["filename"])[0]
+    return PlainTextResponse(
+        content=full_text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{base_name}_transcript.txt"'}
+    )
 
 @router.post("/{project_id}/start")
 async def start_project_processing(project_id: str):

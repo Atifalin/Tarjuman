@@ -19,7 +19,12 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     LMSTUDIO_BASE_URL: str = os.getenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
     MLX_VLM_BASE_URL: str = os.getenv("MLX_VLM_BASE_URL", "http://127.0.0.1:8082/v1")
-    MLX_OCR_MODEL_NAME: str = os.getenv("MLX_OCR_MODEL_NAME", "qari-ocr-0.4.0-mlx-4bit")
+    # NOTE: mlx_vlm.server is launched with --model set to the *full local directory path*
+    # (see main.py::_try_autostart_mlx_server). Every /chat/completions request must send that
+    # exact same identifier in its "model" field, or mlx_vlm.server will treat it as a HF repo id
+    # and try to download it (causing a 401/404 "Repository Not Found" and silent Apple Vision
+    # fallback). Only override MLX_OCR_MODEL_NAME if you started the server differently yourself.
+    MLX_OCR_MODEL_NAME: str = os.getenv("MLX_OCR_MODEL_NAME", "")
 
     # Local model weights folder (GGUF / CTranslate2 / MLX). Defaults to a portable
     # in-repo folder so a fresh clone on any M2+/16GB+ Mac works out of the box.

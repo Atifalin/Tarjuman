@@ -394,27 +394,17 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({ models }) => {
                 )}
               </div>
 
-              {/* Meta NLLB-200 */}
+              {/* Meta NLLB-200 1.3B */}
               <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-white">Meta NLLB-200</span>
+                  <span className="font-bold text-white">Meta NLLB-200 1.3B</span>
                   <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                    deps?.pytorch.installed ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'
+                    deps?.readiness_matrix?.['nllb-200-distilled-1.3b']?.ready ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-rose-950 text-rose-300 border border-rose-800'
                   }`}>
-                    {deps?.pytorch.installed ? '✓ READY' : '❌ PyTorch Missing'}
+                    {deps?.readiness_matrix?.['nllb-200-distilled-1.3b']?.ready ? '✓ READY' : '❌ NOT INSTALLED'}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-400">3.3B Distilled Seq2Seq</p>
-                {!deps?.pytorch.installed && (
-                  <button
-                    onClick={handleInstallTorchInline}
-                    disabled={actionInProgress === 'torch'}
-                    className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[10px] font-bold py-1.5 rounded-lg flex items-center justify-center gap-1"
-                  >
-                    {actionInProgress === 'torch' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                    Install PyTorch (MPS)
-                  </button>
-                )}
+                <p className="text-[11px] text-slate-400">Direct ar → ur (CTranslate2 int8)</p>
               </div>
 
               {/* Qwen3 8B */}

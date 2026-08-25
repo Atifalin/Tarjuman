@@ -14,8 +14,8 @@ class ProjectCreate(BaseModel):
     min_completeness_floor: float = 3.5
     min_naturalness_floor: float = 3.5
     min_terminology_floor: float = 3.5
-    primary_model_id: str = "madlad400-7b-mt"
-    secondary_model_id: Optional[str] = "nllb-200-3.3b"
+    primary_model_id: str = "nllb-200-distilled-1.3b"
+    secondary_model_id: Optional[str] = None
     reviewer_model_id: Optional[str] = "qwen3:8b"
     gemini_model_id: Optional[str] = "gemini-3.6-flash"
     preferred_english_provider: Optional[str] = "qwen3:8b"
@@ -114,6 +114,8 @@ class TranslationMemoryItem(BaseModel):
     source_arabic: str
     approved_urdu: str
     usage_count: int = 1
+    source_provider: Optional[str] = None
+    source_model: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

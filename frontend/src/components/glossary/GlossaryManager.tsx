@@ -8,7 +8,8 @@ import {
   Search,
   BookOpen,
   CheckCircle2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { GlossaryItem } from '../../types';
 import { api } from '../../services/api';
@@ -69,6 +70,21 @@ export const GlossaryManager: React.FC = () => {
       loadData();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const [clearingTm, setClearingTm] = useState(false);
+  const handleClearTm = async () => {
+    if (!confirm(`Delete all ${tmList.length} cached Translation Memory entries? Any earlier approvals made with a misconfigured/uninstalled model will be removed so future chunks are re-translated using your currently configured engine.`)) return;
+    setClearingTm(true);
+    try {
+      const res = await api.clearTranslationMemory();
+      alert(res.message);
+      await loadData();
+    } catch (e: any) {
+      alert(`Failed to clear Translation Memory: ${e.message}`);
+    } finally {
+      setClearingTm(false);
     }
   };
 
@@ -144,6 +160,18 @@ export const GlossaryManager: React.FC = () => {
           >
             Translation Memory Cache ({tmList.length})
           </button>
+
+          {activeTab === 'tm' && tmList.length > 0 && (
+            <button
+              onClick={handleClearTm}
+              disabled={clearingTm}
+              className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800 disabled:opacity-50"
+              title="Wipe the entire cache — useful if earlier approvals were made with a different/misconfigured model"
+            >
+              {clearingTm ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              Clear Cache
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 w-72">
@@ -292,13 +320,14 @@ export const GlossaryManager: React.FC = () => {
               <tr>
                 <th className="p-4">Source Arabic Sentence</th>
                 <th className="p-4">Approved Urdu Translation</th>
+                <th className="p-4">Produced By</th>
                 <th className="p-4">Reuse Count</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-850">
               {filteredTm.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="p-8 text-center text-slate-500">
+                  <td colSpan={4} className="p-8 text-center text-slate-500">
                     No approved sentences in Translation Memory yet. As you approve chunks in Review Mode, they will be cached here automatically.
                   </td>
                 </tr>
@@ -307,6 +336,9 @@ export const GlossaryManager: React.FC = () => {
                   <tr key={m.id} className="hover:bg-slate-950/40 transition-colors">
                     <td className="p-4 font-arabic text-base text-slate-200">{m.source_arabic}</td>
                     <td className="p-4 font-urdu text-xl text-emerald-300">{m.approved_urdu}</td>
+                    <td className="p-4 font-mono text-[11px] text-slate-400">
+                      {m.source_model || <span className="text-amber-400">unknown (pre-tracking)</span>}
+                    </td>
                     <td className="p-4 font-mono font-bold text-indigo-400">{m.usage_count}x</td>
                   </tr>
                 ))

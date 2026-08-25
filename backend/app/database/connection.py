@@ -139,6 +139,16 @@ def init_db():
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tm_hash ON translation_memory(source_hash);")
 
+        # Migration columns for translation_memory (provenance: which model/provider actually produced it)
+        for col_name, col_type in [
+            ("source_provider", "TEXT"),
+            ("source_model", "TEXT")
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE translation_memory ADD COLUMN {col_name} {col_type};")
+            except Exception:
+                pass
+
         # Benchmarks table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS benchmarks (

@@ -328,8 +328,13 @@ class BenchmarkSuite:
             try:
                 prov = router.get_provider_for_model(mid)
                 avail = await prov.check_availability()
-                if avail.is_available:
-                    available_models.append(mid)
+                if not avail.is_available:
+                    continue
+                # Guard against silently triggering multi-GB downloads for uninstalled
+                # Transformers-backed models (e.g. MADLAD-400) during an automated batch run.
+                if hasattr(prov, "has_local_weights_cached") and not prov.has_local_weights_cached(mid):
+                    continue
+                available_models.append(mid)
             except Exception:
                 pass
 

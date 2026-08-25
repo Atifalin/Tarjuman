@@ -7,6 +7,7 @@ from backend.app.providers.ollama_provider import OllamaProvider
 from backend.app.providers.lmstudio_provider import LMStudioProvider
 from backend.app.providers.gemini_provider import GeminiProvider
 from backend.app.providers.transformers_provider import TransformersProvider
+from backend.app.providers.nllb_provider import NLLBProvider
 from backend.app.database.connection import get_db
 
 router = APIRouter(prefix="/api/providers", tags=["Providers"])
@@ -144,6 +145,8 @@ async def test_arabic_model(req: TestModelRequest):
     elif pname == "mlx":
         from backend.app.providers.mlx_provider import MLXProvider
         prov = MLXProvider()
+    elif pname in ["nllb", "nllb-200"]:
+        prov = NLLBProvider()
     else:
         prov = OllamaProvider()
 

@@ -145,16 +145,45 @@ class TranslationOrchestrator:
                         
                         if is_scanned_page or not page_text:
                             from backend.app.pdf.qwen_vl_ocr import QwenVLOCRProvider
+                            from backend.app.pdf.mlx_ocr_provider import MLXOCRProvider
+
+                            mlx_avail = await MLXOCRProvider.check_availability()
+                            if mlx_avail.get("is_available") and not mlx_avail.get("models"):
+                                # Server is up but hasn't loaded weights into memory yet (first request only).
+                                ServerActivityTracker.set_activity(
+                                    "OCR_PROCESSING",
+                                    f"Loading Qari-OCR-0.4.0 model into memory (first page only, ~30-90s on Apple Silicon)... {fname} (Page {page_num}/{info['total_pages']})",
+                                    project_id,
+                                    fname,
+                                    f"Page {page_num}"
+                                )
+                            elif mlx_avail.get("is_available"):
+                                ServerActivityTracker.set_activity(
+                                    "OCR_PROCESSING",
+                                    f"Transcribing with Qari-OCR-0.4.0 (MLX, native Arabic): {fname} (Page {page_num}/{info['total_pages']})...",
+                                    project_id,
+                                    fname,
+                                    f"Page {page_num}"
+                                )
+                            else:
+                                ServerActivityTracker.set_activity(
+                                    "OCR_PROCESSING",
+                                    f"Qari-OCR MLX server not running — using Qwen2-VL/Apple Vision fallback: {fname} (Page {page_num}/{info['total_pages']})...",
+                                    project_id,
+                                    fname,
+                                    f"Page {page_num}"
+                                )
+
+                            ocr_text, ocr_ok, ocr_engine_used, is_fallback = await QwenVLOCRProvider.ocr_page(doc, page_num)
+                            if ocr_ok and ocr_text:
+                                page_text = ocr_text
                             ServerActivityTracker.set_activity(
                                 "OCR_PROCESSING",
-                                f"Transcribing Scanned Page via Qwen2-VL/Apple Vision: {fname} (Page {page_num}/{info['total_pages']})...",
+                                f"Finished page {page_num}/{info['total_pages']} via {ocr_engine_used} ({'fallback' if is_fallback else 'primary'}).",
                                 project_id,
                                 fname,
                                 f"Page {page_num}"
                             )
-                            ocr_text, ocr_ok, ocr_engine_used, is_fallback = await QwenVLOCRProvider.ocr_page(doc, page_num)
-                            if ocr_ok and ocr_text:
-                                page_text = ocr_text
 
                         page_chunks = ArabicChunker.chunk_page_text(page_text, page_num)
                         now_str = datetime.now().isoformat()

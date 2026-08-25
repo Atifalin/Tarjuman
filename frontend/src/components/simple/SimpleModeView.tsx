@@ -220,6 +220,42 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
 
   const currentReviewChunk = reviewChunks[reviewIndex];
 
+  const [switchingModel, setSwitchingModel] = useState(false);
+  const handleSwitchToInstalledNLLB = async () => {
+    if (!activeProject) return;
+    setSwitchingModel(true);
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, {
+        primary_model_id: 'nllb-200-distilled-1.3b',
+        secondary_model_id: ''
+      });
+      onSelectProject(updated);
+      await loadProjectData(activeProject.id);
+    } catch (e: any) {
+      alert(`Failed to switch model: ${e.message}`);
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
+  const isUsingUninstalledPrimary = !!activeProject && activeProject.primary_model_id !== 'nllb-200-distilled-1.3b' &&
+    !deps?.readiness_matrix?.[activeProject.primary_model_id]?.ready;
+
+  const [switchingMode, setSwitchingMode] = useState(false);
+  const handleEnableContinuousMode = async () => {
+    if (!activeProject) return;
+    setSwitchingMode(true);
+    try {
+      const updated = await api.updateProjectModels(activeProject.id, { mode: 'hybrid' });
+      onSelectProject(updated);
+      await loadProjectData(activeProject.id);
+    } catch (e: any) {
+      alert(`Failed to switch mode: ${e.message}`);
+    } finally {
+      setSwitchingMode(false);
+    }
+  };
+  const isReviewModeStepping = activeProject?.mode === 'review';
+
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       
@@ -419,6 +455,42 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
             </p>
           </div>
 
+          {isUsingUninstalledPrimary && (
+            <div className="bg-amber-950/40 border border-amber-800 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div className="text-xs text-amber-200">
+                <span className="font-bold">This project's primary model (<code>{activeProject?.primary_model_id}</code>) isn't downloaded.</span>
+                {' '}Translating will trigger a large first-time download, or silently fall back to a lower-quality engine.
+                Switch to the already-installed <strong>Meta NLLB-200 1.3B</strong> instead?
+              </div>
+              <button
+                onClick={handleSwitchToInstalledNLLB}
+                disabled={switchingModel}
+                className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-lg whitespace-nowrap shadow-md"
+              >
+                {switchingModel ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Use NLLB-200 1.3B</span>
+              </button>
+            </div>
+          )}
+
+          {isReviewModeStepping && (
+            <div className="bg-cyan-950/40 border border-cyan-800 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div className="text-xs text-cyan-200">
+                <span className="font-bold">This project is in "Review Mode"</span>
+                {' '}— by design it translates <strong>one chunk at a time</strong> and stops, waiting for you to click "Resume" before continuing.
+                This isn't a pause or a crash — it's the mode's intended behavior. Switch to <strong>Hybrid Mode</strong> for continuous, hands-off queue processing (still flags low-confidence chunks for review in Step 4).
+              </div>
+              <button
+                onClick={handleEnableContinuousMode}
+                disabled={switchingMode}
+                className="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-lg whitespace-nowrap shadow-md"
+              >
+                {switchingMode ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Enable Continuous Translation</span>
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             {/* OCR Engine Card */}
             <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
@@ -429,7 +501,7 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Primary: <strong>Qwen2-VL</strong> (Ollama) with automatic fallback to <strong>Apple Vision OCR</strong>.
+                Primary: <strong>Qari-OCR-0.4.0 (MLX)</strong> with automatic fallback to <strong>Qwen2-VL / Apple Vision OCR</strong>.
               </p>
               <div className="text-[11px] font-mono text-slate-400 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
                 Active Selection: {arbiter?.ocr.label || 'Apple Vision OCR'}
@@ -449,7 +521,7 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Primary: <strong>Meta NLLB-200</strong> (Direct) | Fallback: <strong>Argos Translate</strong> (ar → en → ur).
+                Primary: <strong>Meta NLLB-200 1.3B</strong> (Direct ar → ur) | Fallback: <strong>Argos Translate</strong> (ar → en → ur).
               </p>
               <div className="text-[11px] font-mono text-slate-400 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
                 Active Selection: {arbiter?.translation.label || 'Argos Translate'}
@@ -490,7 +562,9 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
                 3. Translation Queue Progress
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Continuous on-device execution with real-time memory safety throttling.
+                {isReviewModeStepping
+                  ? 'Review Mode: translates one chunk, then stops for your approval by design.'
+                  : 'Continuous on-device execution with real-time memory safety throttling.'}
               </p>
             </div>
 
@@ -503,9 +577,28 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
               }`}
             >
               {projectStats?.is_running ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-              <span>{projectStats?.is_running ? 'Pause Translation' : 'Resume Translation'}</span>
+              <span>
+                {projectStats?.is_running
+                  ? 'Pause Translation'
+                  : isReviewModeStepping
+                  ? 'Translate Next Chunk'
+                  : 'Resume Translation'}
+              </span>
             </button>
           </div>
+
+          {isReviewModeStepping && (
+            <div className="bg-cyan-950/30 border border-cyan-900/50 rounded-lg px-3 py-2 text-[11px] text-cyan-300 flex items-center justify-between gap-3">
+              <span>Stuck clicking through chunks one at a time? Switch to continuous processing in Step 2.</span>
+              <button
+                onClick={handleEnableContinuousMode}
+                disabled={switchingMode}
+                className="text-cyan-200 hover:text-white underline font-bold whitespace-nowrap"
+              >
+                {switchingMode ? 'Switching...' : 'Enable Continuous Mode'}
+              </button>
+            </div>
+          )}
 
           {/* Progress Bar */}
           {projectStats && (
@@ -606,7 +699,12 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
 
                 {/* Urdu Translation Editor */}
                 <div className="bg-slate-950 p-4 rounded-xl border border-indigo-900/40 space-y-2">
-                  <span className="text-xs font-bold text-indigo-400 uppercase">Urdu Translation</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-400 uppercase">Urdu Translation</span>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {currentReviewChunk.primary_model ? `by ${currentReviewChunk.primary_model}` : 'No model metadata'}
+                    </span>
+                  </div>
                   <textarea
                     value={editedUrdu}
                     onChange={(e) => setEditedUrdu(e.target.value)}
@@ -614,6 +712,30 @@ export const SimpleModeView: React.FC<SimpleModeViewProps> = ({
                     dir="rtl"
                     className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-emerald-300 font-urdu-body text-lg focus:outline-none focus:border-indigo-500 leading-relaxed text-right"
                   />
+                  <div className="text-[11px] font-mono text-slate-400 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">Primary:</span>
+                      <span className="text-emerald-300 font-bold">{currentReviewChunk.primary_model || 'Unknown'}</span>
+                      <span className="text-slate-500">({currentReviewChunk.execution_backend || 'n/a'})</span>
+                    </div>
+                    {currentReviewChunk.secondary_model && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Secondary:</span>
+                        <span className="text-cyan-300">{currentReviewChunk.secondary_model}</span>
+                      </div>
+                    )}
+                    {currentReviewChunk.review_model && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-500">Reviewer:</span>
+                        <span className="text-indigo-300">{currentReviewChunk.review_model}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">OCR:</span>
+                      <span className="text-amber-300">{currentReviewChunk.ocr_engine || 'Apple Vision OCR'}</span>
+                      {currentReviewChunk.latency_ms != null && <span className="text-slate-500 ml-2">· {currentReviewChunk.latency_ms}ms</span>}
+                    </div>
+                  </div>
                 </div>
               </div>
 

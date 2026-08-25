@@ -17,10 +17,19 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
     Direct Local Transformers / PyTorch Seq2Seq Provider.
     Specifically tuned for Seq2Seq Machine Translation models:
     - Google MADLAD-400 7B MT (target prefix: `<2ur> `)
-    - Meta NLLB-200 3.3B (source: `arb_Arab`, target: `urd_Arab` via forced_bos_token_id)
     Executes true Seq2Seq encoder-decoder inference on Apple Silicon MPS / CPU.
     Never routes translation models through chat APIs.
+
+    NOTE: `check_availability()` only reports whether the PyTorch/Transformers *runtime*
+    is installed — it deliberately does NOT imply model weights are downloaded. MADLAD-400
+    7B is a ~14GB download that only happens when a user explicitly runs `translate()`/
+    `test_arabic_urdu_model()` for it; use `has_local_weights_cached()` to check first
+    before wiring this provider into any automated/batch flow (e.g. "Run All Benchmarks").
     """
+
+    HF_REPO_MAP = {
+        "madlad400-7b-mt": "google/madlad400-7b-mt",
+    }
 
     def __init__(self):
         self._loaded_models = {}
@@ -38,6 +47,18 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
     def is_cloud(self) -> bool:
         return False
 
+    def has_local_weights_cached(self, model_id: str) -> bool:
+        """Checks the local HuggingFace cache for already-downloaded weights, without downloading anything."""
+        repo_id = self.HF_REPO_MAP.get(model_id.lower())
+        if not repo_id:
+            return False
+        try:
+            from huggingface_hub import scan_cache_dir
+            cache_info = scan_cache_dir()
+            return any(repo.repo_id == repo_id for repo in cache_info.repos)
+        except Exception:
+            return False
+
     async def check_availability(self) -> Tuple_Availability:
         try:
             import torch
@@ -45,12 +66,12 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
             has_mps = torch.backends.mps.is_available()
             return Tuple_Availability(
                 is_available=True,
-                status_message=f"Local PyTorch Seq2Seq ready (Apple Silicon MPS: {'Enabled' if has_mps else 'CPU mode'})",
+                status_message=f"Local PyTorch Seq2Seq runtime ready (Apple Silicon MPS: {'Enabled' if has_mps else 'CPU mode'}). Model weights are downloaded separately on first use.",
                 details={
                     "mps_available": has_mps,
                     "torch_version": torch.__version__,
                     "transformers_version": transformers.__version__,
-                    "supported_models": ["madlad400-7b-mt", "nllb-200-3.3b"]
+                    "supported_models": ["madlad400-7b-mt"]
                 }
             )
         except ImportError as e:
@@ -108,38 +129,8 @@ class TransformersProvider(AIProvider, TranslationModelAdapter):
                 )
             translated = tok.decode(outputs[0], skip_special_tokens=True).strip()
 
-        # 2. Meta NLLB-200 Seq2Seq Inference
-        elif "nllb" in model.lower():
-            # NLLB requires source lang arb_Arab and forced_bos_token_id for urd_Arab
-            if model not in self._loaded_models:
-                try:
-                    tok = AutoTokenizer.from_pretrained("facebook/nllb-200-3.3B", src_lang="arb_Arab")
-                    mdl = AutoModelForSeq2SeqLM.from_pretrained(
-                        "facebook/nllb-200-3.3B",
-                        torch_dtype=torch.float16 if device == "mps" else torch.float32,
-                        low_cpu_mem_usage=True
-                    ).to(device)
-                    self._loaded_tokenizers[model] = tok
-                    self._loaded_models[model] = mdl
-                except Exception as e:
-                    raise RuntimeError(f"NLLB-200 3.3B model weights not available locally in cache: {e}")
-
-            tok = self._loaded_tokenizers[model]
-            mdl = self._loaded_models[model]
-
-            inputs = tok(source_text, return_tensors="pt").to(device)
-            # Find Urdu token ID
-            urd_id = tok.convert_tokens_to_ids("urd_Arab")
-            with torch.no_grad():
-                outputs = mdl.generate(
-                    **inputs,
-                    forced_bos_token_id=urd_id,
-                    max_new_tokens=kwargs.get("max_tokens", 512)
-                )
-            translated = tok.decode(outputs[0], skip_special_tokens=True).strip()
-
         else:
-            raise ValueError(f"Unknown Seq2Seq translation model identifier: {model}")
+            raise ValueError(f"Unknown Seq2Seq translation model identifier: {model}. Use NLLBProvider for NLLB-200 models.")
 
         latency = int((time.perf_counter() - t0) * 1000)
         return TranslationResult(

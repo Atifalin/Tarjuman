@@ -109,11 +109,42 @@ export const api = {
     return res.json();
   },
 
+  updateProjectModels: async (
+    projectId: string,
+    updates: { primary_model_id?: string; secondary_model_id?: string; reviewer_model_id?: string; gemini_model_id?: string; mode?: string }
+  ): Promise<ProjectRecord> => {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/models`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Failed to update project models');
+    }
+    return res.json();
+  },
+
   listProjectDocuments: async (projectId: string): Promise<DocumentRecord[]> => {
     const res = await fetch(`${API_BASE}/projects/${projectId}/documents`);
     if (!res.ok) throw new Error('Failed to list documents');
     return res.json();
   },
+
+  getDocumentTranscript: async (projectId: string, documentId: string): Promise<{
+    document_id: string;
+    filename: string;
+    chunks: { page_number: number; chunk_index: number; source_text: string; ocr_engine: string | null; ocr_timestamp: string | null }[];
+    full_text: string;
+    ocr_engines_used: string[];
+  }> => {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/documents/${documentId}/transcript`);
+    if (!res.ok) throw new Error('Failed to load transcript');
+    return res.json();
+  },
+
+  getDocumentTranscriptDownloadUrl: (projectId: string, documentId: string) =>
+    `${API_BASE}/projects/${projectId}/documents/${documentId}/transcript.txt`,
 
   startProject: async (projectId: string) => {
     const res = await fetch(`${API_BASE}/projects/${projectId}/start`, { method: 'POST' });
@@ -244,6 +275,11 @@ export const api = {
     return res.json();
   },
 
+  clearTranslationMemory: async (): Promise<{ success: boolean; message: string; deleted_count: number }> => {
+    const res = await fetch(`${API_BASE}/glossary/translation-memory`, { method: 'DELETE' });
+    return res.json();
+  },
+
   // Benchmark Suite
   getBenchmarkSamples: async (): Promise<BenchmarkSample[]> => {
     const res = await fetch(`${API_BASE}/benchmarks/samples`);
@@ -340,6 +376,12 @@ export const api = {
 
   verifyArgos: async (): Promise<any> => {
     const res = await fetch(`${API_BASE}/system/verify-argos`, { method: 'POST' });
+    return res.json();
+  },
+
+  verifyQariOCR: async (): Promise<any> => {
+    const res = await fetch(`${API_BASE}/system/verify-ocr`);
+    if (!res.ok) throw new Error('Failed to verify Qari OCR server');
     return res.json();
   },
 

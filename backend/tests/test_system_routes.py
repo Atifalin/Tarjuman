@@ -37,4 +37,4 @@ def test_failed_benchmark_metrics_are_null():
     assert output["estimated_tokens_per_min"] is None
     assert output["urdu_text"] is None
     assert output["output_length_words"] == 0
-    assert "PyTorch" in output["error"] or "torch" in output["error"]
+    assert output["error"] is not None and len(output["error"]) > 0

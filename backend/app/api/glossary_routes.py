@@ -31,6 +31,22 @@ def add_glossary_term(req: AddTermRequest):
     )
     return TerminologyManager.add_term(item)
 
+@router.get("/translation-memory")
+def get_translation_memory():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM translation_memory ORDER BY usage_count DESC, updated_at DESC LIMIT 200;")
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+
+@router.delete("/translation-memory")
+def clear_translation_memory():
+    """Wipes all cached Translation Memory entries. Use this if earlier approvals were
+    produced by a different/misconfigured model and are now poisoning exact-match lookups."""
+    from backend.app.terminology.translation_memory import TranslationMemory
+    deleted = TranslationMemory.clear_all()
+    return {"success": True, "message": f"Cleared {deleted} Translation Memory entries.", "deleted_count": deleted}
+
 @router.delete("/{term_id}")
 def delete_glossary_term(term_id: str):
     success = TerminologyManager.delete_term(term_id)
@@ -49,11 +65,3 @@ async def import_glossary_csv(file: UploadFile = File(...), project_id: Optional
     csv_text = content.decode("utf-8-sig")
     count = TerminologyManager.import_csv(csv_text, project_id)
     return {"success": True, "imported_count": count}
-
-@router.get("/translation-memory")
-def get_translation_memory():
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM translation_memory ORDER BY usage_count DESC, updated_at DESC LIMIT 200;")
-        rows = cursor.fetchall()
-        return [dict(r) for r in rows]

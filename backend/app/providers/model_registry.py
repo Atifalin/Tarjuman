@@ -59,32 +59,6 @@ MODEL_REGISTRY: Dict[str, ModelCapability] = {
         route_description="Direct (arb_Arab -> urd_Arab), native CTranslate2 int8 on Apple Silicon CPU (no MLX seq2seq runtime exists)"
     ),
 
-    "nllb-200-3.3b": ModelCapability(
-        model_id="nllb-200-3.3b",
-        display_name="Meta NLLB-200 3.3B Distilled",
-        provider_name="transformers",
-        provider_class="LOCAL_MT",
-        privacy_class="OFFLINE",
-        cost_class="FREE_LOCAL",
-        architecture="seq2seq",
-        execution_backends=["transformers", "mlx"],
-        source_languages=["arb_Arab", "ar"],
-        target_languages=["urd_Arab", "ur"],
-        translation_capable=True,
-        review_capable=False,
-        parameter_count="3.3B",
-        precision="float16 / 4-bit",
-        quantization="4-bit / 8-bit quantized",
-        estimated_runtime_ram_gb=6.5,
-        minimum_recommended_ram_gb=12.0,
-        recommended_ram_gb=24.0,
-        verified=True,
-        official_source_url="https://huggingface.co/facebook/nllb-200-3.3B",
-        role="PRIMARY_OR_ESCALATION",
-        direct_pair=True,
-        route_description="Direct (arb_Arab -> urd_Arab)"
-    ),
-
     "nllb-200-distilled-600m": ModelCapability(
         model_id="nllb-200-distilled-600m",
         display_name="Meta NLLB-200 600M Distilled (Lightweight)",

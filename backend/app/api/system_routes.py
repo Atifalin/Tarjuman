@@ -156,16 +156,6 @@ async def get_dependencies_status():
     else:
         madlad_reason = "READY (Local MPS/CPU)"
 
-    # Meta NLLB-200 (direct ar -> ur)
-    nllb_weights_exist = Path("data/models/nllb-200-600m").exists()
-    nllb_ready = nllb_weights_exist or (torch_installed and transformers_installed)
-    if not (torch_installed or nllb_weights_exist):
-        nllb_reason = "PyTorch / CTranslate2 not installed"
-    elif not (nllb_weights_exist or transformers_installed):
-        nllb_reason = "Transformers library or weights missing"
-    else:
-        nllb_reason = "READY (Direct ar → ur)"
-
     # Meta NLLB-200 1.3B (CTranslate2 int8, the recommended default)
     nllb_13b_dir_exists = (_models_dir() / NLLB_CT2_DIRNAME / "model.bin").exists()
     nllb_13b_ready = nllb_13b_dir_exists
@@ -282,7 +272,6 @@ async def get_dependencies_status():
             "apple-native-translation": {"ready": apple_ready, "status": "READY (ar -> en)", "reason": apple_reason},
             "qwen2-vl:7b": {"ready": qwen_vl_ready, "status": "READY" if qwen_vl_ready else ("NOT_CONNECTED" if not ollama_running else "NOT_INSTALLED"), "reason": qwen_vl_reason},
             "madlad400-7b-mt": {"ready": madlad_ready, "status": "READY" if madlad_ready else "NOT_INSTALLED", "reason": madlad_reason},
-            "nllb-200-3.3b": {"ready": nllb_ready, "status": "READY" if nllb_ready else "NOT_INSTALLED", "reason": nllb_reason},
             "nllb-200-distilled-1.3b": {"ready": nllb_13b_ready, "status": "READY" if nllb_13b_ready else "NOT_INSTALLED", "reason": nllb_13b_reason},
             "qari-ocr-0.4.0-vl-4b": {"ready": qari_ready, "status": "READY" if qari_ready else "NOT_INSTALLED", "reason": qari_reason},
             "qwen3:8b": {"ready": qwen3_ready, "status": "READY" if qwen3_ready else ("NOT_CONNECTED" if not ollama_running else "NOT_INSTALLED"), "reason": qwen3_reason},
@@ -619,6 +608,31 @@ print("Saving processor/tokenizer...", flush=True)
 processor = AutoProcessor.from_pretrained(adapter_repo)
 processor.save_pretrained(out_dir)
 
+# mlx-vlm (0.6.15) expects the old flat `rope_theta` / `rope_scaling` fields on text_config,
+# but recent transformers versions nest them under `rope_parameters` instead. Patch the saved
+# config.json so mlx_vlm.convert can parse it.
+print("Patching config.json for mlx-vlm compatibility (rope_parameters -> rope_theta/rope_scaling)...", flush=True)
+import json
+import os as _os
+config_path = _os.path.join(out_dir, "config.json")
+with open(config_path) as f:
+    cfg = json.load(f)
+text_cfg = cfg.get("text_config", cfg)
+rope_params = text_cfg.get("rope_parameters")
+if rope_params and "rope_theta" not in text_cfg:
+    text_cfg["rope_theta"] = rope_params.get("rope_theta", 5000000)
+    text_cfg["rope_scaling"] = {
+        "type": rope_params.get("rope_type", "default"),
+        "mrope_section": rope_params.get("mrope_section", [24, 20, 20]),
+    }
+# mlx-vlm 0.6.15 only recognizes the older "qwen3_vl"/"qwen3_5*" vision model_type strings;
+# recent transformers renamed the vision sub-config's model_type to "qwen3_vl_vision".
+vision_cfg = cfg.get("vision_config")
+if vision_cfg and vision_cfg.get("model_type") == "qwen3_vl_vision":
+    vision_cfg["model_type"] = "qwen3_vl"
+with open(config_path, "w") as f:
+    json.dump(cfg, f, indent=2)
+
 print("MERGE_COMPLETE", flush=True)
 """
 
@@ -643,7 +657,7 @@ def _run_mlx_ocr_install():
     env["HF_HOME"] = str(_models_dir() / ".hf_cache")
 
     try:
-        pip_cmd = [python_bin, "-m", "pip", "install", "--upgrade", "mlx", "mlx-vlm", "peft", "transformers", "accelerate"]
+        pip_cmd = [python_bin, "-m", "pip", "install", "--upgrade", "mlx", "mlx-vlm", "peft", "transformers", "accelerate", "torchvision"]
         INSTALL_STATE["logs"] += f"Executing: {' '.join(pip_cmd)}\n"
         proc = subprocess.Popen(pip_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in iter(proc.stdout.readline, ''):
@@ -920,3 +934,16 @@ async def open_models_folder():
         return {"success": False, "message": f"Directory path: {models_dir}"}
     except Exception as e:
         return {"success": False, "message": f"Failed to open folder: {str(e)}"}
+
+
+@router.get("/verify-ocr")
+async def verify_ocr_server():
+    """Health-checks the local Qari-OCR MLX-VLM server."""
+    from backend.app.pdf.mlx_ocr_provider import MLXOCRProvider
+    status = await MLXOCRProvider.check_availability()
+    return {
+        "success": status.get("is_available", False),
+        "server_url": settings.MLX_VLM_BASE_URL,
+        "models": status.get("models", []),
+        "message": status.get("status_message", "Unknown")
+    }

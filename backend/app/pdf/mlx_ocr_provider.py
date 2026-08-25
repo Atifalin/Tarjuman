@@ -1,11 +1,35 @@
 import base64
 import logging
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List
 import fitz
 import httpx
 from backend.app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _collapse_repetition_loops(text: str, max_repeats: int = 4) -> str:
+    """
+    Safety net against vision-model decoding degeneration: if the same word repeats more
+    than `max_repeats` times in a row (e.g. "صاحب صاحب صاحب..." hundreds of times), collapse
+    the run down to `max_repeats` copies instead of shipping a corrupted transcription.
+    """
+    if not text:
+        return text
+    tokens = text.split(" ")
+    out: List[str] = []
+    run_word = None
+    run_len = 0
+    for tok in tokens:
+        key = tok.strip(",\u060c.!?\u061f;\u061b()")
+        if key and key == run_word:
+            run_len += 1
+        else:
+            run_word = key
+            run_len = 1
+        if run_len <= max_repeats:
+            out.append(tok)
+    return " ".join(out)
 
 
 class MLXOCRProvider:
@@ -66,8 +90,12 @@ class MLXOCRProvider:
             img_bytes = pix.tobytes("png")
             b64_image = base64.b64encode(img_bytes).decode("utf-8")
 
+            # Must match the identifier mlx_vlm.server was launched with (the full local model
+            # directory path) — otherwise the server tries to resolve the short name as a HF
+            # repo id and fails with a 401/404 "Repository Not Found" on every request.
+            model_id = settings.MLX_OCR_MODEL_NAME or str((settings.MODELS_DIR / "qari-ocr-0.4.0-mlx-4bit").resolve())
             payload = {
-                "model": settings.MLX_OCR_MODEL_NAME,
+                "model": model_id,
                 "messages": [
                     {"role": "system", "content": cls.OCR_SYSTEM_PROMPT},
                     {
@@ -80,14 +108,21 @@ class MLXOCRProvider:
                 ],
                 "temperature": 0.1,
                 "max_tokens": 2048,
-                "stream": False
+                "stream": False,
+                # Prevents decoding degeneration loops (e.g. "صاحب صاحب صاحب..." repeated
+                # hundreds of times) that low-temperature greedy-ish decoding can fall into,
+                # especially on dense/repetitive manuscript layouts (headers, footnote marks).
+                "repetition_penalty": 1.3,
+                "repetition_context_size": 64
             }
 
-            async with httpx.AsyncClient(timeout=90.0) as client:
+            # First request after server start has to load ~3GB of weights onto the GPU (can take
+            # 30-90s on a Mac mini M4); subsequent pages reuse the already-loaded model and are fast.
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 resp = await client.post(f"{url}/chat/completions", json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
-                    text = data["choices"][0]["message"]["content"].strip()
+                    text = _collapse_repetition_loops(data["choices"][0]["message"]["content"].strip())
                     if len(text) > 10:
                         logger.info(f"Qari-OCR (MLX) transcribed {len(text)} chars for page {page_num}")
                         return text, True, "Qari-OCR-0.4.0 (MLX)"
